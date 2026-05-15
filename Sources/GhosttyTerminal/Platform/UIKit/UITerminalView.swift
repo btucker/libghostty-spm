@@ -60,7 +60,7 @@
             set { core.configuration = newValue }
         }
 
-        var surface: TerminalSurface? {
+        public var surface: TerminalSurface? {
             core.surface
         }
 

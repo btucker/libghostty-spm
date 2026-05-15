@@ -109,6 +109,55 @@ public final class TerminalSurface {
         }
     }
 
+    // MARK: - Selection (public API)
+
+    /// Press the LEFT mouse button at the current `sendMousePos` location.
+    /// Used by external callers (e.g., touch-driven selection on iOS) to
+    /// drive libghostty's native selection state machine.
+    @discardableResult
+    public func sendLeftMouseDown() -> Bool {
+        sendMouseButton(
+            state: GHOSTTY_MOUSE_PRESS,
+            button: GHOSTTY_MOUSE_LEFT,
+            mods: ghostty_input_mods_e(0)
+        )
+    }
+
+    /// Release the LEFT mouse button.
+    @discardableResult
+    public func sendLeftMouseUp() -> Bool {
+        sendMouseButton(
+            state: GHOSTTY_MOUSE_RELEASE,
+            button: GHOSTTY_MOUSE_LEFT,
+            mods: ghostty_input_mods_e(0)
+        )
+    }
+
+    /// Update the mouse position with no modifier keys held.
+    public func sendMousePos(x: Double, y: Double) {
+        sendMousePos(x: x, y: y, mods: ghostty_input_mods_e(0))
+    }
+
+    /// Trigger a named binding action (e.g., `"select_all"`,
+    /// `"clear_selection"`).
+    @discardableResult
+    public func performAction(_ name: String) -> Bool {
+        performBindingAction(name)
+    }
+
+    /// Returns the current selection's text, if any, by calling
+    /// `ghostty_surface_read_selection`. Returns `nil` when there is
+    /// no active selection or the surface is uninitialized.
+    public func readSelection() -> String? {
+        guard let s = surface else { return nil }
+        guard ghostty_surface_has_selection(s) else { return nil }
+        var text = ghostty_text_s()
+        guard ghostty_surface_read_selection(s, &text) else { return nil }
+        defer { ghostty_surface_free_text(s, &text) }
+        guard let cString = text.text else { return nil }
+        return String(cString: cString)
+    }
+
     // MARK: - Actions
 
     @discardableResult
