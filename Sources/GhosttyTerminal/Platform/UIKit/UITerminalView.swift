@@ -60,6 +60,12 @@
             set { core.configuration = newValue }
         }
 
+        /// Embedder-controlled render throttle (see `TerminalRenderPace`).
+        public var renderPace: TerminalRenderPace {
+            get { core.renderPace }
+            set { core.renderPace = newValue }
+        }
+
         public var surface: TerminalSurface? {
             core.surface
         }

@@ -8,6 +8,7 @@
 import Foundation
 import GhosttyKit
 import MSDisplayLink
+import QuartzCore
 
 /// Shared terminal state and logic used by both UIKit and AppKit views.
 ///
@@ -36,6 +37,13 @@ final class TerminalSurfaceCoordinator {
 
     var surface: TerminalSurface?
     let bridge = TerminalCallbackBridge()
+
+    /// Embedder-controlled render throttle. While `.reduced`, `tick()`
+    /// runs its body at most once per interval. `synchronizeMetrics()`
+    /// resets the gate so resizes/rotations render immediately.
+    var renderPace: TerminalRenderPace = .full
+
+    private var lastThrottledTickAt: CFTimeInterval = 0
 
     // MARK: - Platform Hooks
 
@@ -182,6 +190,7 @@ final class TerminalSurfaceCoordinator {
         }
 
         lastMetrics = metrics
+        lastThrottledTickAt = 0
         TerminalDebugLog.log(.metrics, "sync updated \(metrics.debugSummary)")
         configuration.inMemorySession?.updateViewport(surfaceSize)
         if let delegate = delegate as? any TerminalSurfaceGridResizeDelegate {
@@ -202,6 +211,11 @@ final class TerminalSurfaceCoordinator {
     // MARK: - Frame Rendering
 
     func tick() {
+        if case let .reduced(interval) = renderPace {
+            let now = CACurrentMediaTime()
+            guard now - lastThrottledTickAt >= interval else { return }
+            lastThrottledTickAt = now
+        }
         TerminalDebugLog.log(.render, "tick")
         controller?.tick()
         surface?.refresh()
