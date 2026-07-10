@@ -49,10 +49,10 @@
                 if applyingStickyModifiers {
                     _ = view.handleStickyCommittedText(text)
                 } else {
-                    view.surface?.sendText(text)
+                    view.deliverSoftwareText(text)
                 }
             #else
-                view.surface?.sendText(text)
+                view.deliverSoftwareText(text)
             #endif
             view.refreshInputAccessoryContent()
 
@@ -133,10 +133,10 @@
                     if applyingStickyModifiers {
                         _ = view.handleStickyCommittedText(committedText)
                     } else {
-                        view.surface?.sendText(committedText)
+                        view.deliverSoftwareText(committedText)
                     }
                 #else
-                    view.surface?.sendText(committedText)
+                    view.deliverSoftwareText(committedText)
                 #endif
             }
             view.refreshInputAccessoryContent()

@@ -9,7 +9,7 @@
 
     extension UITerminalView {
         override public var inputAccessoryView: UIView? {
-            terminalInputAccessory
+            showsInputAccessory ? terminalInputAccessory : nil
         }
 
         func handleInputBarKey(_ key: TerminalInputBarKey) {
@@ -104,7 +104,7 @@
         @discardableResult
         func handleStickyCommittedText(_ text: String) -> Bool {
             handleStickyTextInput(text) { [weak self] text in
-                self?.surface?.sendText(text)
+                self?.deliverSoftwareText(text)
             }
         }
 

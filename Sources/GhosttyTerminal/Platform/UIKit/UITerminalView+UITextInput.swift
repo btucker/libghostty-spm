@@ -85,6 +85,10 @@
                 return
             }
 
+            if softwareInputDelegate?.terminalViewDeleteBackward(self) == true {
+                return
+            }
+
             let delivery = TerminalHardwareKeyRouter.routeUIKit(
                 usage: UInt16(UIKeyboardHIDUsage.keyboardDeleteOrBackspace.rawValue),
                 backend: configuration.backend

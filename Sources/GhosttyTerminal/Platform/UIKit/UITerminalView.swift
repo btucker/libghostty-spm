@@ -30,6 +30,22 @@
         lazy var inputHandler = TerminalTextInputHandler(view: self)
         weak var _inputDelegate: (any UITextInputDelegate)?
 
+        public weak var softwareInputDelegate: (any TerminalSoftwareInputDelegate)?
+
+        public var isKeyboardInputEnabled = true {
+            didSet {
+                guard !isKeyboardInputEnabled, isFirstResponder else { return }
+                resignFirstResponder()
+            }
+        }
+
+        public var showsInputAccessory = true {
+            didSet {
+                guard showsInputAccessory != oldValue, isFirstResponder else { return }
+                reloadInputViews()
+            }
+        }
+
         #if !targetEnvironment(macCatalyst)
             lazy var terminalInputAccessory = TerminalInputAccessoryView(terminalView: self)
             let stickyModifiers = TerminalStickyModifierState()
@@ -75,7 +91,7 @@
         }
 
         override public var canBecomeFirstResponder: Bool {
-            true
+            isKeyboardInputEnabled
         }
 
         override public init(frame: CGRect) {
@@ -163,6 +179,15 @@
             #if !targetEnvironment(macCatalyst)
                 terminalInputAccessory.refreshContent()
             #endif
+        }
+
+        @discardableResult
+        func deliverSoftwareText(_ text: String) -> Bool {
+            if softwareInputDelegate?.terminalView(self, insertText: text) == true {
+                return true
+            }
+            surface?.sendText(text)
+            return false
         }
     }
 #endif
