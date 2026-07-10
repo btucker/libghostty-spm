@@ -266,6 +266,33 @@
         }
 
         @Test
+        func disabledKeyboardDoesNotFocusSurfaceWhenResponderAttemptFails() throws {
+            let fixture = try SurfaceFixture()
+            let delegate = FocusDelegateSpy()
+            fixture.view.delegate = delegate
+            fixture.view.isKeyboardInputEnabled = false
+
+            let becameFirstResponder = fixture.view.becomeFirstResponder()
+
+            #expect(!becameFirstResponder)
+            #expect(!fixture.view.isFirstResponder)
+            #expect(delegate.focusChanges.isEmpty)
+        }
+
+        @Test
+        func successfulResponderAttemptFocusesSurface() throws {
+            let fixture = try SurfaceFixture()
+            let delegate = FocusDelegateSpy()
+            fixture.view.delegate = delegate
+
+            let becameFirstResponder = fixture.view.becomeFirstResponder()
+
+            #expect(becameFirstResponder)
+            #expect(fixture.view.isFirstResponder)
+            #expect(delegate.focusChanges == [true])
+        }
+
+        @Test
         func accessoryVisibilityCanBeChanged() async throws {
             #if !targetEnvironment(macCatalyst)
                 let fixture = try SurfaceFixture()
@@ -350,6 +377,15 @@
         func terminalViewDeleteBackward(_: UITerminalView) -> Bool {
             deleteCallCount += 1
             return deleteResult
+        }
+    }
+
+    @MainActor
+    private final class FocusDelegateSpy: TerminalSurfaceFocusDelegate {
+        var focusChanges: [Bool] = []
+
+        func terminalDidChangeFocus(_ focused: Bool) {
+            focusChanges.append(focused)
         }
     }
 

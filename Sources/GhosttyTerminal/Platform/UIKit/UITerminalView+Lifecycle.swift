@@ -115,7 +115,9 @@
         @discardableResult
         override func becomeFirstResponder() -> Bool {
             let result = super.becomeFirstResponder()
-            core.setFocus(true)
+            if result {
+                core.setFocus(true)
+            }
             return result
         }
 
