@@ -1,5 +1,6 @@
 #if canImport(UIKit)
     import Foundation
+    import GhosttyKit
     @testable import GhosttyTerminal
     import Testing
     import UIKit
@@ -45,19 +46,20 @@
         }
 
         @Test
-        func directAndReplacementTextUseDelegateOnce() {
-            let view = UITerminalView()
+        func directAndReplacementTextUseDelegateOnce() throws {
+            let fixture = try SurfaceFixture()
             let delegate = SoftwareInputDelegateSpy()
             delegate.insertResult = true
-            view.softwareInputDelegate = delegate
+            fixture.view.softwareInputDelegate = delegate
 
-            view.insertText("direct")
-            view.replace(
+            fixture.view.insertText("direct")
+            fixture.view.replace(
                 TerminalTextRange(location: 0, length: 0),
                 withText: "replacement"
             )
 
             #expect(delegate.insertedTexts == ["direct", "replacement"])
+            #expect(fixture.output.data.isEmpty)
         }
 
         @Test
@@ -83,20 +85,24 @@
         }
 
         @Test
-        func unmarkCommitUsesDelegateAndPreservesInputNotifications() {
-            let view = UITerminalView()
+        func unmarkCommitUsesDelegateAndPreservesInputNotifications() throws {
+            let fixture = try SurfaceFixture()
             let softwareDelegate = SoftwareInputDelegateSpy()
             softwareDelegate.insertResult = true
             let textDelegate = TextInputDelegateSpy()
-            view.softwareInputDelegate = softwareDelegate
-            view.inputDelegate = textDelegate
+            fixture.view.softwareInputDelegate = softwareDelegate
+            fixture.view.inputDelegate = textDelegate
 
-            view.setMarkedText("compose", selectedRange: NSRange(location: 7, length: 0))
+            fixture.view.setMarkedText(
+                "compose",
+                selectedRange: NSRange(location: 7, length: 0)
+            )
             textDelegate.events.removeAll()
-            view.unmarkText()
+            fixture.view.unmarkText()
 
             #expect(softwareDelegate.insertedTexts == ["compose"])
-            #expect(view.markedTextRange == nil)
+            #expect(fixture.output.data.isEmpty)
+            #expect(fixture.view.markedTextRange == nil)
             #expect(textDelegate.events == [
                 "textWillChange",
                 "selectionWillChange",
@@ -106,17 +112,21 @@
         }
 
         @Test
-        func insertTextCommitClearsMarkedTextAndUsesDelegate() {
-            let view = UITerminalView()
+        func insertTextCommitClearsMarkedTextAndUsesDelegate() throws {
+            let fixture = try SurfaceFixture()
             let delegate = SoftwareInputDelegateSpy()
             delegate.insertResult = true
-            view.softwareInputDelegate = delegate
-            view.setMarkedText("preedit", selectedRange: NSRange(location: 7, length: 0))
+            fixture.view.softwareInputDelegate = delegate
+            fixture.view.setMarkedText(
+                "preedit",
+                selectedRange: NSRange(location: 7, length: 0)
+            )
 
-            view.insertText("final")
+            fixture.view.insertText("final")
 
             #expect(delegate.insertedTexts == ["final"])
-            #expect(view.markedTextRange == nil)
+            #expect(fixture.output.data.isEmpty)
+            #expect(fixture.view.markedTextRange == nil)
         }
 
         @Test
@@ -136,37 +146,79 @@
         }
 
         @Test
-        func hardwareSuppressionPrecedesSoftwareDelegate() {
-            let view = UITerminalView()
+        func printableHardwareKeySuppressesDuplicateSoftwareCallback() async throws {
+            let fixture = try SurfaceFixture()
             let delegate = SoftwareInputDelegateSpy()
             delegate.insertResult = true
-            delegate.deleteResult = true
-            view.softwareInputDelegate = delegate
+            fixture.view.softwareInputDelegate = delegate
 
-            view.hardwareKeyHandled = true
-            view.insertText("printable")
-            view.hardwareKeyHandled = true
-            view.deleteBackward()
+            fixture.view.handleKeyPress(
+                .init(
+                    usage: UInt16(UIKeyboardHIDUsage.keyboardA.rawValue),
+                    characters: "a",
+                    charactersIgnoringModifiers: "a",
+                    modifierFlags: []
+                ),
+                action: GHOSTTY_ACTION_PRESS
+            )
+            fixture.controller.tick()
+            fixture.view.insertText("a")
+            await fixture.output.waitForData()
 
             #expect(delegate.insertedTexts.isEmpty)
-            #expect(delegate.deleteCallCount == 0)
-            #expect(!view.hardwareKeyHandled)
+            #expect(fixture.output.data == Data("a".utf8))
+            #expect(!fixture.view.hardwareKeyHandled)
         }
 
         @Test
-        func modifiedAndDeadKeyCommitSequenceStillReachesSoftwareDelegate() {
-            let view = UITerminalView()
+        func backspaceHardwareKeySuppressesDuplicateSoftwareCallback() async throws {
+            let fixture = try SurfaceFixture()
             let delegate = SoftwareInputDelegateSpy()
-            delegate.insertResult = true
-            view.softwareInputDelegate = delegate
+            delegate.deleteResult = true
+            fixture.view.softwareInputDelegate = delegate
 
-            // Modified and dead-key hardware events intentionally do not arm
-            // UIKeyInput suppression; UIKit's later committed text must flow once.
-            view.hardwareKeyHandled = false
-            view.insertText("é")
+            fixture.view.handleKeyPress(
+                .init(
+                    usage: UInt16(UIKeyboardHIDUsage.keyboardDeleteOrBackspace.rawValue),
+                    characters: "",
+                    charactersIgnoringModifiers: "",
+                    modifierFlags: []
+                ),
+                action: GHOSTTY_ACTION_PRESS
+            )
+            fixture.controller.tick()
+            fixture.view.deleteBackward()
+            await fixture.output.waitForData()
 
-            #expect(delegate.insertedTexts == ["é"])
-            #expect(!view.hardwareKeyHandled)
+            #expect(delegate.deleteCallCount == 0)
+            #expect(fixture.output.data == Data([0x7F]))
+            #expect(!fixture.view.hardwareKeyHandled)
+        }
+
+        @Test
+        func modifiedPrintableSequenceOnlyChangesCommittedTextSink() async throws {
+            try await expectCommittedTextSinkIsOnlyDifference(
+                event: .init(
+                    usage: UInt16(UIKeyboardHIDUsage.keyboardA.rawValue),
+                    characters: "å",
+                    charactersIgnoringModifiers: "a",
+                    modifierFlags: .alternate
+                ),
+                committedText: "å"
+            )
+        }
+
+        @Test
+        func deadKeySequenceOnlyChangesCommittedTextSink() async throws {
+            try await expectCommittedTextSinkIsOnlyDifference(
+                event: .init(
+                    usage: UInt16(UIKeyboardHIDUsage.keyboardE.rawValue),
+                    characters: "",
+                    charactersIgnoringModifiers: "e",
+                    modifierFlags: .alternate
+                ),
+                committedText: "é"
+            )
         }
 
         #if !targetEnvironment(macCatalyst)
@@ -214,7 +266,7 @@
         }
 
         @Test
-        func accessoryVisibilityCanBeChanged() throws {
+        func accessoryVisibilityCanBeChanged() async throws {
             #if !targetEnvironment(macCatalyst)
                 let fixture = try SurfaceFixture()
                 #expect(fixture.view.becomeFirstResponder())
@@ -223,6 +275,24 @@
                 fixture.view.showsInputAccessory = false
                 #expect(fixture.view.inputAccessoryView == nil)
 
+                let delegate = SoftwareInputDelegateSpy()
+                delegate.insertResult = true
+                fixture.view.softwareInputDelegate = delegate
+                fixture.view.handleKeyPress(
+                    .init(
+                        usage: UInt16(UIKeyboardHIDUsage.keyboardA.rawValue),
+                        characters: "a",
+                        charactersIgnoringModifiers: "a",
+                        modifierFlags: []
+                    ),
+                    action: GHOSTTY_ACTION_PRESS
+                )
+                fixture.controller.tick()
+                fixture.view.insertText("a")
+                await fixture.output.waitForData()
+                #expect(fixture.output.data == Data("a".utf8))
+                #expect(delegate.insertedTexts.isEmpty)
+
                 fixture.view.showsInputAccessory = true
                 #expect(fixture.view.inputAccessoryView != nil)
             #else
@@ -230,6 +300,38 @@
                 view.showsInputAccessory = false
                 #expect(!view.showsInputAccessory)
             #endif
+        }
+
+        private func expectCommittedTextSinkIsOnlyDifference(
+            event: TerminalUIKitKeyEvent,
+            committedText: String
+        ) async throws {
+            let fallbackFixture = try SurfaceFixture()
+            fallbackFixture.view.handleKeyPress(event, action: GHOSTTY_ACTION_PRESS)
+            fallbackFixture.controller.tick()
+            await fallbackFixture.output.waitForData()
+            let fallbackPhysicalOutput = fallbackFixture.output.data
+            fallbackFixture.view.insertText(committedText)
+
+            let handledFixture = try SurfaceFixture()
+            let delegate = SoftwareInputDelegateSpy()
+            delegate.insertResult = true
+            handledFixture.view.softwareInputDelegate = delegate
+            handledFixture.view.handleKeyPress(event, action: GHOSTTY_ACTION_PRESS)
+            handledFixture.controller.tick()
+            await handledFixture.output.waitForData()
+            let handledPhysicalOutput = handledFixture.output.data
+            handledFixture.view.insertText(committedText)
+
+            #expect(handledPhysicalOutput == fallbackPhysicalOutput)
+            #expect(
+                fallbackFixture.output.data
+                    == fallbackPhysicalOutput + Data(committedText.utf8)
+            )
+            #expect(handledFixture.output.data == handledPhysicalOutput)
+            #expect(delegate.insertedTexts == [committedText])
+            #expect(!fallbackFixture.view.hardwareKeyHandled)
+            #expect(!handledFixture.view.hardwareKeyHandled)
         }
     }
 
@@ -288,6 +390,12 @@
 
         func append(_ data: Data) {
             lock.withLock { storage.append(data) }
+        }
+
+        func waitForData() async {
+            for _ in 0 ..< 100 where data.isEmpty {
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
         }
     }
 

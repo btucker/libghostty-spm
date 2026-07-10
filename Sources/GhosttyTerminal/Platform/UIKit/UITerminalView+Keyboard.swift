@@ -9,6 +9,34 @@
     import GhosttyKit
     import UIKit
 
+    struct TerminalUIKitKeyEvent {
+        let usage: UInt16
+        let characters: String
+        let charactersIgnoringModifiers: String
+        let modifierFlags: UIKeyModifierFlags
+
+        init(
+            usage: UInt16,
+            characters: String,
+            charactersIgnoringModifiers: String,
+            modifierFlags: UIKeyModifierFlags
+        ) {
+            self.usage = usage
+            self.characters = characters
+            self.charactersIgnoringModifiers = charactersIgnoringModifiers
+            self.modifierFlags = modifierFlags
+        }
+
+        init(_ key: UIKey) {
+            self.init(
+                usage: UInt16(key.keyCode.rawValue),
+                characters: key.characters,
+                charactersIgnoringModifiers: key.charactersIgnoringModifiers,
+                modifierFlags: key.modifierFlags
+            )
+        }
+    }
+
     public extension UITerminalView {
         override func pressesBegan(
             _ presses: Set<UIPress>,
@@ -43,6 +71,13 @@
             _ key: UIKey,
             action: ghostty_input_action_e
         ) {
+            handleKeyPress(TerminalUIKitKeyEvent(key), action: action)
+        }
+
+        internal func handleKeyPress(
+            _ key: TerminalUIKitKeyEvent,
+            action: ghostty_input_action_e
+        ) {
             guard let surface else {
                 TerminalDebugLog.log(.input, "uikit key ignored: missing surface")
                 return
@@ -64,13 +99,13 @@
             }
 
             let delivery = TerminalHardwareKeyRouter.routeUIKit(
-                usage: UInt16(key.keyCode.rawValue),
+                usage: key.usage,
                 backend: configuration.backend
             )
 
             TerminalDebugLog.log(
                 .input,
-                "uikit key action=\(TerminalDebugLog.describe(action)) code=\(key.keyCode.rawValue) chars=\(TerminalDebugLog.describe(key.characters)) ignoring=\(TerminalDebugLog.describe(key.charactersIgnoringModifiers)) mods=0x\(String(filteredModifierFlags.rawValue, radix: 16)) delivery=\(delivery.debugSummary) marked=\(inputHandler.hasMarkedText)"
+                "uikit key action=\(TerminalDebugLog.describe(action)) code=\(key.usage) chars=\(TerminalDebugLog.describe(key.characters)) ignoring=\(TerminalDebugLog.describe(key.charactersIgnoringModifiers)) mods=0x\(String(filteredModifierFlags.rawValue, radix: 16)) delivery=\(delivery.debugSummary) marked=\(inputHandler.hasMarkedText)"
             )
 
             if action == GHOSTTY_ACTION_RELEASE, delivery.isDirectInput {
@@ -139,7 +174,7 @@
         }
 
         internal func shouldSuppressUIKeyInput(
-            for key: UIKey,
+            for key: TerminalUIKitKeyEvent,
             isCommandModified: Bool
         ) -> Bool {
             guard !isCommandModified else { return false }
@@ -147,7 +182,9 @@
                 return false
             }
             guard !key.characters.isEmpty else {
-                return key.keyCode == .keyboardDeleteOrBackspace
+                return key.usage == UInt16(
+                    UIKeyboardHIDUsage.keyboardDeleteOrBackspace.rawValue
+                )
             }
             return true
         }
@@ -175,7 +212,9 @@
             return true
         }
 
-        private func filteredModifierFlags(for key: UIKey) -> UIKeyModifierFlags {
+        private func filteredModifierFlags(
+            for key: TerminalUIKitKeyEvent
+        ) -> UIKeyModifierFlags {
             var flags = key.modifierFlags
             let isFunctionKey =
                 TerminalInputText.filteredFunctionKeyText(key.characters) == nil ||
@@ -187,7 +226,7 @@
         }
 
         private func commandZoomDirection(
-            for key: UIKey,
+            for key: TerminalUIKitKeyEvent,
             action: ghostty_input_action_e,
             filteredModifierFlags: UIKeyModifierFlags
         ) -> KeyboardZoomDirection? {
