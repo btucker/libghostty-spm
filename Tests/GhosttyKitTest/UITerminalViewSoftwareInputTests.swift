@@ -13,6 +13,7 @@
             let view = UITerminalView()
 
             #expect(view.softwareInputDelegate == nil)
+            #expect(view.hardwareInputDelegate == nil)
             #expect(view.isKeyboardInputEnabled)
             #expect(view.canBecomeFirstResponder)
             #expect(view.showsInputAccessory)
@@ -31,6 +32,73 @@
 
             delegate = nil
             #expect(view.softwareInputDelegate == nil)
+        }
+
+        @Test
+        func hardwareInputDelegateIsWeak() {
+            let view = UITerminalView()
+            var delegate: HardwareInputDelegateSpy? = .init()
+
+            view.hardwareInputDelegate = delegate
+            #expect(view.hardwareInputDelegate != nil)
+
+            delegate = nil
+            #expect(view.hardwareInputDelegate == nil)
+        }
+
+        @Test
+        func handledHardwarePressBypassesGhosttyAndSuppressesTextCallback() throws {
+            let fixture = try SurfaceFixture()
+            let hardwareDelegate = HardwareInputDelegateSpy()
+            hardwareDelegate.result = true
+            let softwareDelegate = SoftwareInputDelegateSpy()
+            softwareDelegate.insertResult = true
+            fixture.view.hardwareInputDelegate = hardwareDelegate
+            fixture.view.softwareInputDelegate = softwareDelegate
+            let identity = ObjectIdentifier(NSObject())
+
+            let handled = fixture.view.handleHardwarePressBegan(
+                .init(
+                    usage: UInt16(UIKeyboardHIDUsage.keyboardD.rawValue),
+                    characters: "d",
+                    charactersIgnoringModifiers: "d",
+                    modifierFlags: .command
+                ),
+                identity: identity
+            )
+            fixture.view.insertText("d")
+
+            #expect(handled)
+            #expect(hardwareDelegate.events.count == 1)
+            #expect(hardwareDelegate.events.first?.charactersIgnoringModifiers == "d")
+            #expect(hardwareDelegate.events.first?.modifierFlags == .command)
+            #expect(softwareDelegate.insertedTexts.isEmpty)
+            #expect(fixture.output.data.isEmpty)
+            #expect(fixture.view.hardwarePressesHandledByDelegate.contains(identity))
+        }
+
+        @Test
+        func rejectedHardwarePressFallsThroughToGhostty() async throws {
+            let fixture = try SurfaceFixture()
+            let delegate = HardwareInputDelegateSpy()
+            delegate.result = false
+            fixture.view.hardwareInputDelegate = delegate
+
+            let handled = fixture.view.handleHardwarePressBegan(
+                .init(
+                    usage: UInt16(UIKeyboardHIDUsage.keyboardA.rawValue),
+                    characters: "a",
+                    charactersIgnoringModifiers: "a",
+                    modifierFlags: []
+                ),
+                identity: ObjectIdentifier(NSObject())
+            )
+            fixture.controller.tick()
+            await fixture.output.waitForData()
+
+            #expect(!handled)
+            #expect(delegate.events.count == 1)
+            #expect(fixture.output.data == Data("a".utf8))
         }
 
         @Test
@@ -377,6 +445,20 @@
         func terminalViewDeleteBackward(_: UITerminalView) -> Bool {
             deleteCallCount += 1
             return deleteResult
+        }
+    }
+
+    @MainActor
+    private final class HardwareInputDelegateSpy: TerminalHardwareInputDelegate {
+        var events: [TerminalHardwareKeyEvent] = []
+        var result = false
+
+        func terminalView(
+            _: UITerminalView,
+            handleHardwareKey event: TerminalHardwareKeyEvent
+        ) -> Bool {
+            events.append(event)
+            return result
         }
     }
 

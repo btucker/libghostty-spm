@@ -44,7 +44,10 @@
         ) {
             for press in presses {
                 guard let key = press.key else { continue }
-                handleKeyPress(key, action: GHOSTTY_ACTION_PRESS)
+                handleHardwarePressBegan(
+                    TerminalUIKitKeyEvent(key),
+                    identity: ObjectIdentifier(press)
+                )
             }
         }
 
@@ -53,6 +56,10 @@
             with _: UIPressesEvent?
         ) {
             for press in presses {
+                let identity = ObjectIdentifier(press)
+                if hardwarePressesHandledByDelegate.remove(identity) != nil {
+                    continue
+                }
                 guard let key = press.key else { continue }
                 handleKeyPress(key, action: GHOSTTY_ACTION_RELEASE)
             }
@@ -63,8 +70,39 @@
             _ presses: Set<UIPress>,
             with event: UIPressesEvent?
         ) {
+            for press in presses {
+                hardwarePressesHandledByDelegate.remove(ObjectIdentifier(press))
+            }
             hardwareKeyHandled = false
             super.pressesCancelled(presses, with: event)
+        }
+
+        @discardableResult
+        internal func handleHardwarePressBegan(
+            _ key: TerminalUIKitKeyEvent,
+            identity: ObjectIdentifier
+        ) -> Bool {
+            let publicEvent = TerminalHardwareKeyEvent(
+                usage: key.usage,
+                characters: key.characters,
+                charactersIgnoringModifiers: key.charactersIgnoringModifiers,
+                modifierFlags: key.modifierFlags
+            )
+            if hardwareInputDelegate?.terminalView(
+                self,
+                handleHardwareKey: publicEvent
+            ) == true {
+                hardwarePressesHandledByDelegate.insert(identity)
+                // UIKit may still offer printable hardware input through
+                // UIKeyInput. Suppress that callback just as Ghostty-handled
+                // physical keys do, so an embedder-handled press is emitted
+                // exactly once.
+                hardwareKeyHandled = true
+                return true
+            }
+
+            handleKeyPress(key, action: GHOSTTY_ACTION_PRESS)
+            return false
         }
 
         internal func handleKeyPress(

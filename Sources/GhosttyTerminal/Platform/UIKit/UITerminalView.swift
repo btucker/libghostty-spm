@@ -22,6 +22,7 @@
             var activePointerButton: ghostty_input_mouse_button_e?
         #endif
         var hardwareKeyHandled = false
+        var hardwarePressesHandledByDelegate: Set<ObjectIdentifier> = []
         let touchScrollMultiplier: CGFloat = 3.0
         #if !targetEnvironment(macCatalyst)
             var currentFontSize: Float = 14
@@ -31,6 +32,7 @@
         weak var _inputDelegate: (any UITextInputDelegate)?
 
         public weak var softwareInputDelegate: (any TerminalSoftwareInputDelegate)?
+        public weak var hardwareInputDelegate: (any TerminalHardwareInputDelegate)?
 
         public var isKeyboardInputEnabled = true {
             didSet {
