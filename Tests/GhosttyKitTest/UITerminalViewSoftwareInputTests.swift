@@ -302,6 +302,20 @@
 
                 #expect(delegate.insertedTexts == ["🙂"])
             }
+
+            @Test
+            func stickyDeleteConsumesModifierBeforeSoftwareDelegate() throws {
+                let fixture = try SurfaceFixture()
+                let delegate = SoftwareInputDelegateSpy()
+                delegate.deleteResult = true
+                fixture.view.softwareInputDelegate = delegate
+                fixture.view.toggleStickyModifier(.ctrl)
+
+                fixture.view.deleteBackward()
+
+                #expect(!fixture.view.hasActiveStickyModifiers)
+                #expect(delegate.deleteCallCount == 0)
+            }
         #endif
 
         @Test
@@ -491,11 +505,13 @@
             events.append("textDidChange")
         }
 
-        @available(iOS 18.4, *)
-        func conversationContext(
-            _: UIConversationContext?,
-            didChange _: (any UITextInput)?
-        ) {}
+        #if !targetEnvironment(macCatalyst)
+            @available(iOS 18.4, *)
+            func conversationContext(
+                _: UIConversationContext?,
+                didChange _: (any UITextInput)?
+            ) {}
+        #endif
     }
 
     private final class OutputRecorder: @unchecked Sendable {

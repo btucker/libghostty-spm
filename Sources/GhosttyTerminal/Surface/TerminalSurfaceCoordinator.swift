@@ -10,6 +10,15 @@ import GhosttyKit
 import MSDisplayLink
 import QuartzCore
 
+private final class TerminalTransactionRetirement: NSObject {
+    let owner: AnyObject
+
+    init(owner: AnyObject) {
+        self.owner = owner
+        super.init()
+    }
+}
+
 /// Shared terminal state and logic used by both UIKit and AppKit views.
 ///
 /// Platform views own a `TerminalSurfaceCoordinator` instance and set platform-specific
@@ -37,6 +46,8 @@ final class TerminalSurfaceCoordinator {
 
     var surface: TerminalSurface?
     let bridge = TerminalCallbackBridge()
+    private var surfaceController: TerminalController?
+    private var surfaceSession: InMemoryTerminalSession?
 
     /// Embedder-controlled render throttle. While `.reduced`, scheduled
     /// render wakeups are coalesced to at most one per interval.
@@ -84,6 +95,7 @@ final class TerminalSurfaceCoordinator {
     private var lastTickTimestamp: TimeInterval = 0
     private var tickScheduled = false
     private var scheduledTickGeneration = 0
+    private var transactionRetentionSequence = 0
 
     init() {
         bridge.onCellSizeChange = { [weak self] width, height in
@@ -108,15 +120,25 @@ final class TerminalSurfaceCoordinator {
         tickScheduled = false
     }
 
-    /// Keep the coordinator, and therefore its renderer surface, alive until
-    /// Core Animation finishes the transaction currently using its layers.
-    /// Preserve an existing completion block because UIKit and embedders may
-    /// already have installed work on the implicit transaction.
+    /// Keep the coordinator, and therefore its renderer surface, alive across
+    /// the Core Animation commit currently using its layers.
+    ///
+    /// Do not use `CATransaction.completionBlock`: replacing an existing block
+    /// invokes it immediately, so chaining duplicates embedder completions and
+    /// a later replacement can release the renderer before the commit. Store a
+    /// unique transaction value instead, with a short main-queue retirement as
+    /// a backstop for nested transaction scopes.
     func retainThroughCurrentTransaction() {
-        let previousCompletion = CATransaction.completionBlock()
-        CATransaction.setCompletionBlock { [self] in
-            withExtendedLifetime(self) {
-                previousCompletion?()
+        transactionRetentionSequence &+= 1
+        let retirement = TerminalTransactionRetirement(owner: self)
+        CATransaction.setValue(
+            retirement,
+            forKey: "net.graftty.surface-retirement-\(ObjectIdentifier(self))-\(transactionRetentionSequence)"
+        )
+        DispatchQueue.main.async {
+            CATransaction.flush()
+            DispatchQueue.main.async {
+                withExtendedLifetime(retirement) {}
             }
         }
     }
@@ -124,35 +146,33 @@ final class TerminalSurfaceCoordinator {
     // MARK: - Surface Lifecycle
 
     func rebuildIfReady(removingBridgeFrom previousController: TerminalController? = nil) {
-        // A pane that is merely hidden reports a zero size. Tearing the surface
-        // down here and then bailing out at the size guard below would destroy
-        // ghostty's grid and scrollback for a condition that is temporary: when
-        // the pane comes back there is nothing left to show, and only the app
-        // redrawing can refill it. Keep the surface — the caller re-runs this
-        // once the view has a usable size again.
+        // A pane that is detached or merely hidden reports no usable rendering
+        // destination. Tearing the surface down inside that transition can free
+        // a renderer while Core Animation still has callbacks queued against
+        // its layer. Keep the surface until the view is attached at a valid size.
         //
         // This is the same intent as the reattach guard in viewDidMoveToWindow
         // ("rebuilding on every reattach discards Ghostty's scrollback/state"),
         // which cannot help while the teardown happens before the checks.
-        if surface != nil, previousController == nil, !hasValidViewSize {
+        if surface != nil, !isAttached() || !hasValidViewSize {
             // The rebuild is owed, not cancelled. Configuration options are
-            // consumed only by createSurface, and no caller re-runs this once
-            // the view regains a size (fitToSize, viewDidMoveToWindow and the
-            // UIKit twin all take the surface != nil branch and merely sync
-            // metrics). Dropping the request outright would leave a hidden
-            // pane running its old configuration indefinitely.
+            // consumed only by createSurface. Dropping the request outright
+            // would leave a hidden pane running its old configuration
+            // indefinitely.
             pendingRebuild = true
             let size = viewSize()
             TerminalDebugLog.log(
                 .lifecycle,
-                "surface kept: view size temporarily invalid \(String(format: "%.2f", size.width))x\(String(format: "%.2f", size.height))"
+                "surface kept: rebuild deferred attached=\(isAttached()) size=\(String(format: "%.2f", size.width))x\(String(format: "%.2f", size.height))"
             )
 
             return
         }
         pendingRebuild = false
 
-        tearDownSurface(removingBridgeFrom: previousController ?? controller)
+        tearDownSurface(
+            removingBridgeFrom: surfaceController ?? previousController ?? controller
+        )
         guard let controller else {
             TerminalDebugLog.log(.lifecycle, "surface rebuild skipped: missing controller")
             return
@@ -191,6 +211,8 @@ final class TerminalSurfaceCoordinator {
         bridge.rawSurface = rawSurface
         let newSurface = TerminalSurface(rawSurface)
         surface = newSurface
+        surfaceController = controller
+        surfaceSession = configuration.inMemorySession
         newSurface.setOcclusion(effectiveSurfaceVisible)
         controller.shouldProcessWakeup = { [weak self] in
             self?.canRenderFrame == true
@@ -250,15 +272,16 @@ final class TerminalSurfaceCoordinator {
     /// armed for the old surface must not size — or re-arm against — the
     /// surface that replaced it.
     private var resizeThrottleGeneration = 0
-    /// A rebuild deferred by the zero-size guard above, replayed by
-    /// `synchronizeMetrics` as soon as the view has a usable size again.
+    /// A rebuild deferred while detached or zero-sized, replayed by
+    /// `synchronizeMetrics` once the view is attached at a usable size.
     private var pendingRebuild = false
 
     func synchronizeMetrics() {
-        // Redeem a rebuild the zero-size guard deferred. Every caller that
-        // could restore a usable size lands here, so this is the one place
-        // that reliably observes the transition.
-        if pendingRebuild, hasValidViewSize {
+        // Redeem a deferred rebuild. Reattachment and size restoration both
+        // land here, so this is the one place that reliably observes the
+        // transition.
+        if pendingRebuild {
+            guard isAttached(), hasValidViewSize else { return }
             pendingRebuild = false
             rebuildIfReady()
             return
@@ -354,7 +377,10 @@ final class TerminalSurfaceCoordinator {
         }
 
         lastMetrics = metrics
+        scheduledTickGeneration &+= 1
+        tickScheduled = false
         lastTickTimestamp = 0
+        pendingImmediateTick = true
         TerminalDebugLog.log(.metrics, "sync updated \(metrics.debugSummary)")
         // Deliberately no host resize dispatch here. This runs on the AppKit
         // thread right after setSize(), i.e. before the engine's IO thread has
@@ -382,6 +408,7 @@ final class TerminalSurfaceCoordinator {
             )
         }
         onMetricsUpdate?()
+        scheduleTickIfNeeded()
     }
 
     func fitToSize() {
@@ -470,6 +497,8 @@ final class TerminalSurfaceCoordinator {
         var testHooks_throttleArmed: Bool { resizeThrottleArmed }
         var testHooks_throttleTrailing: Bool { resizeThrottleTrailing }
         var testHooks_throttleGeneration: Int { resizeThrottleGeneration }
+        var testHooks_tickScheduled: Bool { tickScheduled }
+        var testHooks_scheduledTickGeneration: Int { scheduledTickGeneration }
     #endif
 
     // MARK: - Cleanup
@@ -492,18 +521,21 @@ final class TerminalSurfaceCoordinator {
 
     private func tearDownSurface(removingBridgeFrom controller: TerminalController?) {
         TerminalDebugLog.log(.lifecycle, "tear down surface")
+        let owningController = surfaceController ?? controller
         scheduledTickGeneration &+= 1
         tickScheduled = false
-        if let session = configuration.inMemorySession {
+        if let session = surfaceSession {
             session.clearSurface(ifMatches: surface?.rawValue)
         }
-        controller?.onWakeup = nil
-        controller?.shouldProcessWakeup = nil
+        owningController?.onWakeup = nil
+        owningController?.shouldProcessWakeup = nil
         bridge.rawSurface = nil
         let hadSurface = surface != nil
         surface?.setFocus(false)
         surface?.free()
         surface = nil
+        surfaceController = nil
+        surfaceSession = nil
         lastMetrics = nil
         // Retire any armed timer with the surface it was armed for, and
         // clear the gate so the replacement surface sizes immediately
@@ -513,7 +545,7 @@ final class TerminalSurfaceCoordinator {
         resizeThrottleTrailing = false
         pendingImmediateTick = true
         lastTickTimestamp = 0
-        controller?.remove(bridge)
+        owningController?.remove(bridge)
         if hadSurface {
             (delegate as? any TerminalSurfaceLifecycleDelegate)?
                 .terminalDidDetachSurface()

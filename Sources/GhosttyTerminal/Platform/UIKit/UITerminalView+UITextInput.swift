@@ -85,10 +85,6 @@
                 return
             }
 
-            if softwareInputDelegate?.terminalViewDeleteBackward(self) == true {
-                return
-            }
-
             let usage = UInt16(UIKeyboardHIDUsage.keyboardDeleteOrBackspace.rawValue)
 
             #if !targetEnvironment(macCatalyst)
@@ -98,6 +94,10 @@
                     return
                 }
             #endif
+
+            if softwareInputDelegate?.terminalViewDeleteBackward(self) == true {
+                return
+            }
 
             let delivery = TerminalHardwareKeyRouter.routeUIKit(
                 usage: usage,

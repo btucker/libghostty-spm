@@ -1,4 +1,4 @@
-#if canImport(AppKit)
+#if canImport(AppKit) && !canImport(UIKit)
     import AppKit
 #endif
 import Foundation
@@ -131,7 +131,7 @@ struct TerminalHardwareKeyRouterTests {
         )
     }
 
-    #if canImport(AppKit)
+    #if canImport(AppKit) && !canImport(UIKit)
         @Test
         func `app kit interpreted commands are replayed as key events`() {
             #expect(
@@ -345,7 +345,7 @@ struct TerminalHardwareKeyRouterTests {
         #expect(TerminalHardwareKeyRouter.appKitKeyCodeForUIKit(usage: 0x0001) == sentinel)
     }
 
-    #if canImport(AppKit)
+    #if canImport(AppKit) && !canImport(UIKit)
         @Test
         func `app kit direct input requires no modifiers`() {
             #expect(
