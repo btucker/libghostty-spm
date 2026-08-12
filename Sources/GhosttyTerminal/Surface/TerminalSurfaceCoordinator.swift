@@ -108,6 +108,19 @@ final class TerminalSurfaceCoordinator {
         tickScheduled = false
     }
 
+    /// Keep the coordinator, and therefore its renderer surface, alive until
+    /// Core Animation finishes the transaction currently using its layers.
+    /// Preserve an existing completion block because UIKit and embedders may
+    /// already have installed work on the implicit transaction.
+    func retainThroughCurrentTransaction() {
+        let previousCompletion = CATransaction.completionBlock()
+        CATransaction.setCompletionBlock { [self] in
+            withExtendedLifetime(self) {
+                previousCompletion?()
+            }
+        }
+    }
+
     // MARK: - Surface Lifecycle
 
     func rebuildIfReady(removingBridgeFrom previousController: TerminalController? = nil) {

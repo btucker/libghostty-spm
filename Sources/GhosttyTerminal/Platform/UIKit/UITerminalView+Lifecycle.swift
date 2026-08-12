@@ -51,7 +51,14 @@
             )
             updateDisplayScale()
             if window != nil {
-                core.rebuildIfReady()
+                // UIKit can temporarily detach a view while a navigation
+                // transition updates the hierarchy. Rebuilding a live surface
+                // on reattachment discards its renderer, grid, and scrollback.
+                if surface == nil {
+                    core.rebuildIfReady()
+                } else {
+                    core.synchronizeMetrics()
+                }
                 updateColorScheme()
                 core.startDisplayLink()
                 // Defer sublayer frame and metrics sync to the next runloop
@@ -62,8 +69,15 @@
                     core.fitToSize()
                 }
             } else {
+                stopMomentumScrolling(sendTerminalEndEvent: false)
                 core.stopDisplayLink()
-                core.freeSurface()
+                core.setFocus(false)
+                // Core Animation can still invoke a layer display callback
+                // while committing the transaction that detached this view.
+                // If the view is released by the navigation pop, retain its
+                // coordinator until that commit completes so deinit cannot
+                // free Ghostty's renderer underneath the callback.
+                core.retainThroughCurrentTransaction()
             }
         }
 

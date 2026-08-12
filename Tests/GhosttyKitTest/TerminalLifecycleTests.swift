@@ -1,5 +1,9 @@
 @testable import GhosttyTerminal
 import Testing
+#if canImport(UIKit)
+    import QuartzCore
+    import UIKit
+#endif
 
 @MainActor
 struct TerminalLifecycleTests {
@@ -91,4 +95,56 @@ struct TerminalLifecycleTests {
 
         #expect(renders == 1)
     }
+
+    #if canImport(UIKit)
+        @Test
+        func `temporary UIKit detachment preserves the surface until reattachment`() throws {
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+            let viewController = UIViewController()
+            let terminalView = UITerminalView(
+                frame: CGRect(x: 0, y: 0, width: 800, height: 600)
+            )
+            let session = InMemoryTerminalSession(write: { _ in }, resize: { _ in })
+
+            window.rootViewController = viewController
+            window.makeKeyAndVisible()
+            viewController.view.addSubview(terminalView)
+            terminalView.configuration = .init(backend: .inMemory(session))
+            terminalView.controller = TerminalController()
+
+            let originalSurface = try #require(terminalView.surface)
+
+            terminalView.removeFromSuperview()
+
+            #expect(terminalView.window == nil)
+            #expect(terminalView.surface === originalSurface)
+
+            viewController.view.addSubview(terminalView)
+
+            #expect(terminalView.window === window)
+            #expect(terminalView.surface === originalSurface)
+        }
+
+        @Test
+        func `final UIKit teardown waits for the detaching transaction`() async {
+            weak var retainedCoordinator: TerminalSurfaceCoordinator?
+
+            CATransaction.begin()
+            do {
+                let coordinator = TerminalSurfaceCoordinator()
+                retainedCoordinator = coordinator
+                coordinator.retainThroughCurrentTransaction()
+            }
+
+            #expect(retainedCoordinator != nil)
+
+            CATransaction.commit()
+            CATransaction.flush()
+            for _ in 0 ..< 100 where retainedCoordinator != nil {
+                await Task.yield()
+            }
+
+            #expect(retainedCoordinator == nil)
+        }
+    #endif
 }

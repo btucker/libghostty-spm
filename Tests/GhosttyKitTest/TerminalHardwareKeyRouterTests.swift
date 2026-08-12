@@ -1,4 +1,6 @@
-import AppKit
+#if canImport(AppKit)
+    import AppKit
+#endif
 import Foundation
 import GhosttyKit
 @testable import GhosttyTerminal
@@ -129,24 +131,26 @@ struct TerminalHardwareKeyRouterTests {
         )
     }
 
-    @Test
-    func `app kit interpreted commands are replayed as key events`() {
-        #expect(
-            TerminalKeyEventHandler.shouldReplayInterpretedCommand(
-                #selector(NSResponder.insertTab(_:))
+    #if canImport(AppKit)
+        @Test
+        func `app kit interpreted commands are replayed as key events`() {
+            #expect(
+                TerminalKeyEventHandler.shouldReplayInterpretedCommand(
+                    #selector(NSResponder.insertTab(_:))
+                )
             )
-        )
-        #expect(
-            TerminalKeyEventHandler.shouldReplayInterpretedCommand(
-                NSSelectorFromString("insertBacktab:")
+            #expect(
+                TerminalKeyEventHandler.shouldReplayInterpretedCommand(
+                    NSSelectorFromString("insertBacktab:")
+                )
             )
-        )
-        #expect(
-            TerminalKeyEventHandler.shouldReplayInterpretedCommand(
-                #selector(NSResponder.moveUp(_:))
+            #expect(
+                TerminalKeyEventHandler.shouldReplayInterpretedCommand(
+                    #selector(NSResponder.moveUp(_:))
+                )
             )
-        )
-    }
+        }
+    #endif
 
     /// Quote HID 0x34 must translate to AppKit keycode 0x27, not fall
     /// through to `0` (which is AppKit's keycode for the `A` key) nor to
@@ -341,32 +345,34 @@ struct TerminalHardwareKeyRouterTests {
         #expect(TerminalHardwareKeyRouter.appKitKeyCodeForUIKit(usage: 0x0001) == sentinel)
     }
 
-    @Test
-    func `app kit direct input requires no modifiers`() {
-        #expect(
-            TerminalKeyEventHandler.shouldUseDirectInput(
-                modifierFlags: []
+    #if canImport(AppKit)
+        @Test
+        func `app kit direct input requires no modifiers`() {
+            #expect(
+                TerminalKeyEventHandler.shouldUseDirectInput(
+                    modifierFlags: []
+                )
             )
-        )
-        #expect(
-            !TerminalKeyEventHandler.shouldUseDirectInput(
-                modifierFlags: [.shift]
+            #expect(
+                !TerminalKeyEventHandler.shouldUseDirectInput(
+                    modifierFlags: [.shift]
+                )
             )
-        )
-        #expect(
-            !TerminalKeyEventHandler.shouldUseDirectInput(
-                modifierFlags: [.control]
+            #expect(
+                !TerminalKeyEventHandler.shouldUseDirectInput(
+                    modifierFlags: [.control]
+                )
             )
-        )
-        #expect(
-            !TerminalKeyEventHandler.shouldUseDirectInput(
-                modifierFlags: [.option]
+            #expect(
+                !TerminalKeyEventHandler.shouldUseDirectInput(
+                    modifierFlags: [.option]
+                )
             )
-        )
-        #expect(
-            !TerminalKeyEventHandler.shouldUseDirectInput(
-                modifierFlags: [.command]
+            #expect(
+                !TerminalKeyEventHandler.shouldUseDirectInput(
+                    modifierFlags: [.command]
+                )
             )
-        )
-    }
+        }
+    #endif
 }
