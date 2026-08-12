@@ -4,9 +4,9 @@ import PackageDescription
 let package = Package(
     name: "GhosttyKit",
     platforms: [
-        .iOS(.v16),
+        .iOS(.v15),
         .macOS(.v13),
-        .macCatalyst(.v16),
+        .macCatalyst(.v15),
     ],
     products: [
         .library(name: "GhosttyKit", targets: ["GhosttyKit"]),
@@ -30,7 +30,11 @@ let package = Package(
         .target(
             name: "GhosttyTerminal",
             dependencies: ["GhosttyKit", "MSDisplayLink"],
-            path: "Sources/GhosttyTerminal"
+            path: "Sources/GhosttyTerminal",
+            resources: [
+                .copy("Resources/Ghostty"),
+                .copy("Resources/terminfo"),
+            ]
         ),
         .target(
             name: "ShellCraftKit",
@@ -45,8 +49,8 @@ let package = Package(
         ),
         .binaryTarget(
             name: "libghostty",
-            url: "https://github.com/Lakr233/libghostty-spm/releases/download/storage.1.2.2/GhosttyKit.xcframework.zip",
-            checksum: "7f712b8df5943ba02070c468de7d785abedebf207d3a3ded6515c7467309e902"
+            url: "https://github.com/Lakr233/libghostty-spm/releases/download/storage.1.3.2/GhosttyKit.xcframework.zip",
+            checksum: "9dcfaa1958a53b42b454728bbcc62c1be5a63f1537978aee85ce6607eecb57c6"
         ),
         .testTarget(
             name: "GhosttyKitTest",

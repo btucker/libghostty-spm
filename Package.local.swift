@@ -4,9 +4,9 @@ import PackageDescription
 let package = Package(
     name: "GhosttyKit",
     platforms: [
-        .iOS(.v16),
+        .iOS(.v15),
         .macOS(.v13),
-        .macCatalyst(.v16),
+        .macCatalyst(.v15),
     ],
     products: [
         .library(name: "GhosttyKit", targets: ["GhosttyKit"]),
@@ -30,7 +30,10 @@ let package = Package(
         .target(
             name: "GhosttyTerminal",
             dependencies: ["GhosttyKit", "MSDisplayLink"],
-            path: "Sources/GhosttyTerminal"
+            path: "Sources/GhosttyTerminal",
+            resources: [
+                .copy("Resources/Ghostty"),
+            ]
         ),
         .target(
             name: "ShellCraftKit",
