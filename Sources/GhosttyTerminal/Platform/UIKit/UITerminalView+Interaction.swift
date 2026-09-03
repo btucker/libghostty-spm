@@ -522,6 +522,12 @@
                 #endif
                 TerminalDebugLog.log(.input, "touch scroll began")
                 stopMomentumScrolling()
+                activeTouchScrollConfiguration = if surface?.isMouseCaptured == true {
+                    mouseCapturedTouchScrollConfiguration ?? .standard
+                } else {
+                    .standard
+                }
+                touchScrollRateLimiter.begin(at: CACurrentMediaTime())
 
             case .changed:
                 guard activePointerButton == nil else { return }
@@ -532,12 +538,18 @@
                     "touch scroll changed translation=\(String(format: "%.2f", translation.x))x\(String(format: "%.2f", translation.y))"
                 )
 
-                let scrollMods = TerminalScrollModifiers(precision: true)
-                surface?.sendMouseScroll(
-                    x: Double(translation.x * touchScrollMultiplier),
-                    y: Double(translation.y * touchScrollMultiplier),
-                    mods: scrollMods.rawValue
+                let multiplier = activeTouchScrollConfiguration.multiplier
+                let delta = CGPoint(
+                    x: Double(translation.x) * multiplier,
+                    y: Double(translation.y) * multiplier
                 )
+                if let pending = touchScrollRateLimiter.append(
+                    delta,
+                    at: CACurrentMediaTime(),
+                    minimumInterval: activeTouchScrollConfiguration.minimumSendInterval
+                ) {
+                    sendTouchScrollDelta(pending, momentum: .none)
+                }
 
             case .ended:
                 guard activePointerButton == nil else { return }
@@ -546,11 +558,18 @@
                     .input,
                     "touch scroll ended velocity=\(String(format: "%.2f", velocity.x))x\(String(format: "%.2f", velocity.y))"
                 )
-                startMomentumScrolling(velocity: velocity)
+                flushPendingTouchScroll(momentum: .none)
+                if activeTouchScrollConfiguration.momentumEnabled {
+                    startMomentumScrolling(velocity: velocity)
+                } else {
+                    touchScrollRateLimiter.reset()
+                }
 
             case .cancelled, .failed:
                 TerminalDebugLog.log(.input, "touch scroll cancelled")
+                flushPendingTouchScroll(momentum: .none)
                 stopMomentumScrolling()
+                touchScrollRateLimiter.reset()
 
             default:
                 break
@@ -558,9 +577,13 @@
         }
 
         func startMomentumScrolling(velocity: CGPoint) {
-            guard abs(velocity.x) > 50 || abs(velocity.y) > 50 else { return }
+            guard abs(velocity.x) > 50 || abs(velocity.y) > 50 else {
+                touchScrollRateLimiter.reset()
+                return
+            }
 
             momentumVelocity = velocity
+            touchScrollRateLimiter.begin(at: CACurrentMediaTime())
             TerminalDebugLog.log(
                 .input,
                 "momentum start velocity=\(String(format: "%.2f", velocity.x))x\(String(format: "%.2f", velocity.y))"
@@ -584,8 +607,11 @@
             momentumVelocity.x *= deceleration
             momentumVelocity.y *= deceleration
 
-            let deltaX = momentumVelocity.x * dt * touchScrollMultiplier
-            let deltaY = momentumVelocity.y * dt * touchScrollMultiplier
+            let multiplier = activeTouchScrollConfiguration.multiplier
+            let delta = CGPoint(
+                x: Double(momentumVelocity.x) * dt * multiplier,
+                y: Double(momentumVelocity.y) * dt * multiplier
+            )
 
             if abs(momentumVelocity.x) < 50, abs(momentumVelocity.y) < 50 {
                 stopMomentumScrolling()
@@ -594,21 +620,26 @@
 
             TerminalDebugLog.log(
                 .input,
-                "momentum frame velocity=\(String(format: "%.2f", momentumVelocity.x))x\(String(format: "%.2f", momentumVelocity.y)) delta=\(String(format: "%.2f", deltaX))x\(String(format: "%.2f", deltaY))"
+                "momentum frame velocity=\(String(format: "%.2f", momentumVelocity.x))x\(String(format: "%.2f", momentumVelocity.y)) delta=\(String(format: "%.2f", delta.x))x\(String(format: "%.2f", delta.y))"
             )
 
-            let mods = TerminalScrollModifiers(precision: true, momentum: .changed)
-            surface?.sendMouseScroll(
-                x: Double(deltaX),
-                y: Double(deltaY),
-                mods: mods.rawValue
-            )
+            if let pending = touchScrollRateLimiter.append(
+                delta,
+                at: link.targetTimestamp,
+                minimumInterval: activeTouchScrollConfiguration.minimumSendInterval
+            ) {
+                sendTouchScrollDelta(pending, momentum: .changed)
+            }
         }
 
         func stopMomentumScrolling(sendTerminalEndEvent: Bool = true) {
-            guard momentumDisplayLink != nil else { return }
+            guard momentumDisplayLink != nil else {
+                touchScrollRateLimiter.reset()
+                return
+            }
             TerminalDebugLog.log(.input, "momentum stop")
 
+            flushPendingTouchScroll(momentum: .changed)
             if sendTerminalEndEvent {
                 let mods = TerminalScrollModifiers(precision: true, momentum: .none)
                 surface?.sendMouseScroll(x: 0, y: 0, mods: mods.rawValue)
@@ -617,6 +648,24 @@
             momentumDisplayLink?.invalidate()
             momentumDisplayLink = nil
             momentumVelocity = .zero
+            touchScrollRateLimiter.reset()
+        }
+
+        func flushPendingTouchScroll(momentum: TerminalScrollModifiers.Momentum) {
+            guard let pending = touchScrollRateLimiter.flush() else { return }
+            sendTouchScrollDelta(pending, momentum: momentum)
+        }
+
+        func sendTouchScrollDelta(
+            _ delta: CGPoint,
+            momentum: TerminalScrollModifiers.Momentum
+        ) {
+            let mods = TerminalScrollModifiers(precision: true, momentum: momentum)
+            surface?.sendMouseScroll(
+                x: Double(delta.x),
+                y: Double(delta.y),
+                mods: mods.rawValue
+            )
         }
     }
 

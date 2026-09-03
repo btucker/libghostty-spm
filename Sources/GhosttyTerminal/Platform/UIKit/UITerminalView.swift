@@ -29,7 +29,12 @@
         lazy var selectionContextMenuInteraction = UIContextMenuInteraction(delegate: self)
         var hardwareKeyHandled = false
         var hardwarePressesHandledByDelegate: Set<ObjectIdentifier> = []
-        let touchScrollMultiplier: CGFloat = 3.0
+        /// Optional direct-touch scroll policy used only while libghostty
+        /// reports that the terminal application has captured the mouse.
+        /// Nil preserves the ordinary local-scrollback policy.
+        public var mouseCapturedTouchScrollConfiguration: TerminalTouchScrollConfiguration?
+        var activeTouchScrollConfiguration = TerminalTouchScrollConfiguration.standard
+        var touchScrollRateLimiter = TerminalScrollRateLimiter()
         #if !targetEnvironment(macCatalyst)
             var currentFontSize: Float = 14
             var lastPinchScale: CGFloat = 1.0
