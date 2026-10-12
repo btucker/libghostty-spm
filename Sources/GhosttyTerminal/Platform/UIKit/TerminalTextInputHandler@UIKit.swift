@@ -114,6 +114,7 @@
         /// produced it, a shell must not see those lines as Return presses.
         private func sendTypedText(_ text: String) {
             guard let view, !text.isEmpty else { return }
+            if view.softwareInputDelegate?.terminalView(view, insertText: text) == true { return }
 
             guard !text.contains(where: \.isNewline) else {
                 TerminalDebugLog.log(

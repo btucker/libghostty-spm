@@ -18,6 +18,10 @@ enum TerminalHardwareKeyRouter {
         uiKitMap[usage] ?? GHOSTTY_KEY_UNIDENTIFIED
     }
 
+    static func uiKitUsage(for ghosttyKey: ghostty_input_key_e) -> UInt16? {
+        uiKitMap.filter { $0.value == ghosttyKey }.keys.min()
+    }
+
     static func ghosttyKey(forAppKitKeyCode keyCode: UInt16) -> ghostty_input_key_e {
         appKitMap[keyCode] ?? GHOSTTY_KEY_UNIDENTIFIED
     }

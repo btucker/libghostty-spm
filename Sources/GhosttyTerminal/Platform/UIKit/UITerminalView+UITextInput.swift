@@ -10,6 +10,9 @@
     /// UITextInput delegate wiring; behavior lives in +UITextInput.
     struct TextInputBridgeState {
         weak var inputDelegate: (any UITextInputDelegate)?
+        weak var softwareInputDelegate: (any TerminalSoftwareInputDelegate)?
+        var keyboardInputEnabled = true
+        var showsInputAccessory = true
     }
 
     extension UITerminalView: UITextInput, UITextInputTraits {
@@ -96,6 +99,12 @@
 
             if route == .semanticEnter {
                 #if !targetEnvironment(macCatalyst)
+                    if !stickyModifiers.hasActiveModifiers,
+                       softwareInputDelegate?.terminalView(self, insertText: text) == true { return }
+                #else
+                    if softwareInputDelegate?.terminalView(self, insertText: text) == true { return }
+                #endif
+                #if !targetEnvironment(macCatalyst)
                     let mods = stickyModifiers.consumeForNextKey()
                     TerminalDebugLog.log(
                         .input,
@@ -181,6 +190,8 @@
                     return
                 }
             #endif
+
+            if softwareInputDelegate?.terminalViewDeleteBackward(self) == true { return }
 
             var keyEvent = ghostty_input_key_s()
             keyEvent.action = GHOSTTY_ACTION_PRESS

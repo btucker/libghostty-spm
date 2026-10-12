@@ -104,6 +104,11 @@
                 .input,
                 "uikit key command input=\(TerminalDebugLog.describe(input)) mods=0x\(String(command.modifierFlags.rawValue, radix: 16))",
             )
+            if let usage = TerminalHardwareKeyRouter.uiKitUsage(for: press.key.ghosttyKey),
+               offerHardwareKey(TerminalHardwareKeyEvent(
+                   usage: usage, characters: input, charactersIgnoringModifiers: input,
+                   modifierFlags: command.modifierFlags
+               )) { return }
             // A chord, not typing: it closes an open composition the way a
             // hardware press would, and takes the shared key path.
             _ = sendInputKey(press)
@@ -122,6 +127,12 @@
                 .input,
                 "uikit key command input=escape mods=0x\(String(command.modifierFlags.rawValue, radix: 16))",
             )
+            if offerHardwareKey(TerminalHardwareKeyEvent(
+                usage: UInt16(UIKeyboardHIDUsage.keyboardEscape.rawValue),
+                characters: UIKeyCommand.inputEscape,
+                charactersIgnoringModifiers: UIKeyCommand.inputEscape,
+                modifierFlags: command.modifierFlags
+            )) { return }
             _ = sendInputKey(TerminalKeyPress(
                 .escape,
                 modifiers: TerminalInputModifiers(from: command.modifierFlags),

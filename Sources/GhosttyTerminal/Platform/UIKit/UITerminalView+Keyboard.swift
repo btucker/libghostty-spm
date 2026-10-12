@@ -11,6 +11,9 @@
 
     /// Hardware-keyboard routing state; behavior lives in +Keyboard.
     struct HardwareKeyboardState {
+        weak var inputDelegate: (any TerminalHardwareInputDelegate)?
+        var hostHandledPresses: Set<ObjectIdentifier> = []
+        var automaticallyRepeatsKeys = true
         /// A press the key path already delivered, telling the UITextInput
         /// echo to stay silent.
         var keyHandled = false
@@ -105,6 +108,7 @@
                     if !TerminalKeyRepeat.isModifier(usage: UInt16(key.keyCode.rawValue)) {
                         stopKeyRepeat()
                     }
+                    if handleHostHardwarePress(press, key: key) { continue }
                     guard handleKeyPress(key, action: GHOSTTY_ACTION_PRESS) else { continue }
                     startKeyRepeat(for: press)
                 }
@@ -132,6 +136,7 @@
                         }
                         continue
                     }
+                    if handleHostHardwarePress(press, key: key) { continue }
                     // Caps Lock switches the input source in the text input
                     // system, which only sees a press that reaches it.
                     guard handleKeyPress(key, action: GHOSTTY_ACTION_PRESS) else {
@@ -163,6 +168,7 @@
                     if press === hardwareKeyboard.keyRepeat?.press {
                         stopKeyRepeat()
                     }
+                    if hardwareKeyboard.hostHandledPresses.remove(ObjectIdentifier(press)) != nil { continue }
                     guard let key = press.key else { continue }
                     handleKeyPress(key, action: GHOSTTY_ACTION_RELEASE)
                 }
@@ -182,6 +188,7 @@
                         // release either.
                         continue
                     }
+                    if hardwareKeyboard.hostHandledPresses.remove(ObjectIdentifier(press)) != nil { continue }
                     guard let key = press.key else { continue }
                     handleKeyPress(key, action: GHOSTTY_ACTION_RELEASE)
                 }
@@ -206,7 +213,36 @@
                     hardwareKeyboard.pressesForwardedToInputMethod.remove(press)
                 }
             #endif
-            forwardPressesToTextInputSystem(presses, phase: .cancelled, with: event)
+            let unhandled = presses.filter {
+                hardwareKeyboard.hostHandledPresses.remove(ObjectIdentifier($0)) == nil
+            }
+            if !unhandled.isEmpty {
+                forwardPressesToTextInputSystem(Set(unhandled), phase: .cancelled, with: event)
+            }
+        }
+
+        /// A registered key command and its physical press share one claim.
+        /// A host-consumed press owns its release and repeat too.
+        private func handleHostHardwarePress(_ press: UIPress, key: UIKey) -> Bool {
+            let flags = filteredModifierFlags(for: key)
+            if let input = keyCommandInput(for: key, filteredModifierFlags: flags),
+               !claimKeyCommandDelivery(input: input, modifierFlags: flags)
+            {
+                hardwareKeyboard.hostHandledPresses.insert(ObjectIdentifier(press))
+                hardwareKeyboard.keyHandled = true
+                return true
+            }
+            if offerHardwareKey(TerminalHardwareKeyEvent(
+                usage: UInt16(key.keyCode.rawValue),
+                characters: key.characters,
+                charactersIgnoringModifiers: key.charactersIgnoringModifiers,
+                modifierFlags: key.modifierFlags
+            )) {
+                hardwareKeyboard.hostHandledPresses.insert(ObjectIdentifier(press))
+                hardwareKeyboard.keyHandled = true
+                return true
+            }
+            return false
         }
 
         /// The surface has no use for a press changing — only its began and
@@ -216,7 +252,10 @@
             _ presses: Set<UIPress>,
             with event: UIPressesEvent?,
         ) {
-            forwardPressesToTextInputSystem(presses, phase: .changed, with: event)
+            let unhandled = presses.filter { !hardwareKeyboard.hostHandledPresses.contains(ObjectIdentifier($0)) }
+            if !unhandled.isEmpty {
+                forwardPressesToTextInputSystem(Set(unhandled), phase: .changed, with: event)
+            }
         }
 
         private enum ForwardedPressPhase {
@@ -328,20 +367,6 @@
 
             if let codepoint = filteredIgnoringModifiers?.unicodeScalars.first {
                 keyEvent.unshifted_codepoint = codepoint.value
-            }
-
-            // The key command fallback may have sent this very key already
-            // (see `controlKeyCommands` and `escapeKeyCommands`); on systems
-            // that deliver both, the first claim wins and this press stays
-            // silent.
-            if action == GHOSTTY_ACTION_PRESS,
-               let input = keyCommandInput(for: key, filteredModifierFlags: filteredModifierFlags),
-               !claimKeyCommandDelivery(
-                   input: input,
-                   modifierFlags: filteredModifierFlags,
-               )
-            {
-                return true
             }
 
             guard !isCommandModified else {
@@ -645,6 +670,7 @@
         /// Starts repeating the key `press` just sent, when
         /// `TerminalKeyRepeat` says it repeats.
         func startKeyRepeat(for press: UIPress) {
+            guard automaticallyRepeatsHardwareKeys else { return }
             guard let key = press.key else { return }
             let modifierFlags = filteredModifierFlags(for: key)
             #if targetEnvironment(macCatalyst)

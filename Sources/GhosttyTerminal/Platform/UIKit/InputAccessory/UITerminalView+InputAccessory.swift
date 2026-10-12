@@ -15,7 +15,7 @@
             // `+PublicSticky` / `sendKey`, as a Catalyst host does.
             #if !os(visionOS)
                 override open var inputAccessoryView: UIView? {
-                    inputAccessoryItems.isEmpty ? nil : terminalInputAccessory
+                    !showsInputAccessory || inputAccessoryItems.isEmpty ? nil : terminalInputAccessory
                 }
             #endif
 

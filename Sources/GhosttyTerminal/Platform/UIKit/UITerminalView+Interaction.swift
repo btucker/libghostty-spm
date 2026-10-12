@@ -10,6 +10,10 @@
     import UIKit
 
     extension UITerminalView {
+        var usesHostTextSelection: Bool {
+            delegate is any TerminalSurfaceTextSelectionRequestDelegate
+        }
+
         /// How far a finger may wander and still count as a tap.
         static let tapCandidateSlop: CGFloat = 10
         /// How long a press may last and still count as a tap, so a
@@ -186,7 +190,9 @@
             /// Any pointer-drag selection is over by definition — ghostty
             /// clears its selection on the click.
             func sendTapClick(at point: CGPoint) {
-                guard let surface else { return }
+                // The host selection controller may keep a mouse button
+                // held between drags. A click would release its anchor.
+                guard !usesHostTextSelection, let surface else { return }
                 let mods = pointerMods()
                 sendPointerPosition(at: tapClickPoint(for: point, on: surface))
                 surface.sendMouseButton(
@@ -221,14 +227,49 @@
                 return CGPoint(x: cursor.x, y: cursor.y - cursor.height / 2)
             }
 
-            /// Long press opens the touch menu; with inline selection off
-            /// the recognizer never begins (see `gestureRecognizerShouldBegin`).
+            /// A host selection delegate owns the long press when installed;
+            /// otherwise it opens the inline touch menu.
             @objc func handleLongPressForSelection(
                 _ gesture: UILongPressGestureRecognizer,
             ) {
-                guard gesture.state == .began, usesInlineTextSelection else { return }
+                guard gesture.state == .began else { return }
                 softwareKeyboard.tapCandidateArmed = false
+                if usesHostTextSelection {
+                    requestHostTextSelection(at: gesture.location(in: self))
+                    return
+                }
+                guard usesInlineTextSelection else { return }
                 presentTouchMenu(at: gesture.location(in: self))
+            }
+
+            func requestHostTextSelection(at point: CGPoint) {
+                guard let delegate = delegate as? any TerminalSurfaceTextSelectionRequestDelegate,
+                      let surface,
+                      case let .inMemory(session) = configuration.backend
+                else { return }
+
+                stopMomentumScrolling()
+                surface.sendMousePos(x: point.x, y: point.y, mods: ghostty_input_mods_e(rawValue: 0))
+                let word = surface.quicklookWord()
+                guard let text = session.readViewportText() else { return }
+                var anchorRange: NSRange?
+                if let word, !text.isEmpty, let size = surface.size() {
+                    let scale = Double(resolvedDisplayScale())
+                    anchorRange = TerminalSelectionAnchor.resolveRange(
+                        in: text,
+                        word: word.word,
+                        pointX: word.pointX,
+                        pointY: word.pointY,
+                        cellWidthPoints: scale > 0 ? Double(size.cellWidthPixels) / scale : 0,
+                        cellHeightPoints: scale > 0 ? Double(size.cellHeightPixels) / scale : 0
+                    )
+                }
+                #if !os(visionOS)
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                #endif
+                delegate.terminalDidRequestTextSelection(.init(
+                    text: text, anchorRange: anchorRange, sourcePoint: point
+                ))
             }
         #endif
 
@@ -257,7 +298,7 @@
             _ gestureRecognizer: UIGestureRecognizer,
         ) -> Bool {
             if gestureRecognizer is UILongPressGestureRecognizer {
-                return usesInlineTextSelection
+                return usesHostTextSelection || usesInlineTextSelection
             }
             return true
         }

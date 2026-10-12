@@ -280,6 +280,22 @@ public protocol TerminalSurfaceFontSizeDelegate: TerminalSurfaceViewDelegate {
     func terminalDidChangeFontSize(_ fontSize: Float)
 }
 
+/// A viewport snapshot requested by a direct-touch long press.
+public struct TerminalTextSelectionRequest: Sendable {
+    /// Viewport rows separated by newlines.
+    public let text: String
+    /// Suggested word selection in UTF-16 units; nil means select all.
+    public let anchorRange: NSRange?
+    /// Touch location in the terminal view's point coordinates.
+    public let sourcePoint: CGPoint
+}
+
+/// Opts into host-owned touch selection instead of the inline selection UI.
+@MainActor
+public protocol TerminalSurfaceTextSelectionRequestDelegate: TerminalSurfaceViewDelegate {
+    func terminalDidRequestTextSelection(_ request: TerminalTextSelectionRequest)
+}
+
 /// Notifies a delegate when the underlying ``TerminalSurface`` is created or
 /// torn down. Useful when a consumer needs surface-level APIs (e.g.
 /// ``TerminalSurface/paste(text:)``) reachable from outside the platform view.

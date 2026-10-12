@@ -25,6 +25,7 @@
             }
 
             func updateTouchSelectionGestures() {
+                touchSelection.longPress?.minimumPressDuration = usesHostTextSelection ? 0.5 : 0.7
                 for tap in touchSelection.tapRecognizers {
                     tap.isEnabled = usesInlineTextSelection
                 }

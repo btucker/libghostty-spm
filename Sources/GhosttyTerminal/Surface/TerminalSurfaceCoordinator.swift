@@ -55,6 +55,15 @@ final class TerminalSurfaceCoordinator {
     private var isTearingDown = false
     private var isRebuilding = false
     private var transactionRetentionSequence = 0
+    /// Render pacing leaves the controller's native wakeup pump unchanged.
+    var renderPace: TerminalRenderPace = .full {
+        didSet {
+            guard renderPace != oldValue else { return }
+            lastRenderTimestamp = nil
+            requestImmediateTick()
+        }
+    }
+    private var lastRenderTimestamp: TimeInterval?
     let bridge = TerminalCallbackBridge()
 
     // MARK: - Platform Hooks
@@ -438,10 +447,16 @@ final class TerminalSurfaceCoordinator {
             "sync view=\(String(format: "%.2f", size.width))x\(String(format: "%.2f", size.height)) scale=\(String(format: "%.2f", scale)) pixels=\(pixelWidth)x\(pixelHeight)",
         )
 
+        let viewportChanged = syncedViewSize?.width != size.width
+            || syncedViewSize?.height != size.height || syncedScale != scale
         surface.setContentScale(x: scale, y: scale)
         surface.setSize(width: pixelWidth, height: pixelHeight)
         syncedViewSize = size
         syncedScale = scale
+        if viewportChanged {
+            lastRenderTimestamp = nil
+            requestImmediateTick()
+        }
 
         guard let surfaceSize = surface.size(),
               surfaceSize.columns > 0, surfaceSize.rows > 0
@@ -462,6 +477,8 @@ final class TerminalSurfaceCoordinator {
         }
 
         lastMetrics = metrics
+        lastRenderTimestamp = nil
+        requestImmediateTick()
         TerminalDebugLog.log(.metrics, "sync updated \(metrics.debugSummary)")
         // Deliberately no host resize dispatch here. This runs on the AppKit
         // thread right after setSize(), i.e. before the engine's IO thread has
@@ -560,7 +577,7 @@ final class TerminalSurfaceCoordinator {
 
     // MARK: - Frame Rendering
 
-    func tick() {
+    func tick(at timestamp: TimeInterval = ProcessInfo.processInfo.systemUptime) {
         guard canRenderFrame else {
             releaseDisplayLink()
             return
@@ -572,6 +589,14 @@ final class TerminalSurfaceCoordinator {
             }
             return
         }
+        if case let .reduced(interval) = renderPace,
+           let lastRenderTimestamp,
+           timestamp - lastRenderTimestamp < max(0, interval) {
+            // Keep the dirty frame and display link alive until the interval
+            // expires, even if this was the final native render request.
+            return
+        }
+        lastRenderTimestamp = timestamp
         idleFrameCount = 0
         pendingImmediateTick = false
         TerminalDebugLog.log(.render, "tick")
@@ -686,6 +711,7 @@ final class TerminalSurfaceCoordinator {
         resizeThrottleArmed = false
         resizeThrottleTrailing = false
         pendingImmediateTick = true
+        lastRenderTimestamp = nil
         owningController?.remove(bridge)
         surfaceController = nil
         if hadSurface {
@@ -750,6 +776,7 @@ final class TerminalSurfaceCoordinator {
             return
         }
 
+        lastRenderTimestamp = nil
         pendingImmediateTick = true
         tick()
         ensureDisplayLink()

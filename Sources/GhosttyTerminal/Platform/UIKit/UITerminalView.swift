@@ -87,10 +87,12 @@
         /// Double tap selects a word, triple tap selects a row.
         /// Selection gestures and menus leave keyboard visibility unchanged.
         /// Long press opens the menu; one finger extends a selection and two fingers scroll locally.
-        /// Set false to opt out: no touch selection at all, a tap clicks and toggles the keyboard.
+        /// Set false to disable inline selection. A host text-selection delegate
+        /// owns long presses and selection gestures while it is installed;
+        /// removing it restores the stored inline preference.
         /// Mac Catalyst always uses the pointer selection path; there this stays false.
         open var usesInlineTextSelection: Bool {
-            get { touchSelection.enabled }
+            get { touchSelection.enabled && !usesHostTextSelection }
             set {
                 #if !targetEnvironment(macCatalyst)
                     if !newValue {
@@ -142,7 +144,13 @@
 
         open weak var delegate: (any TerminalSurfaceViewDelegate)? {
             get { core.delegate }
-            set { core.delegate = newValue }
+            set {
+                core.delegate = newValue
+                #if !targetEnvironment(macCatalyst)
+                    if usesHostTextSelection { dismissTouchSelection() }
+                    updateTouchSelectionGestures()
+                #endif
+            }
         }
 
         open var controller: TerminalController? {
@@ -178,7 +186,7 @@
         }
 
         override open var canBecomeFirstResponder: Bool {
-            true
+            isKeyboardInputEnabled
         }
 
         override public init(frame: CGRect) {
