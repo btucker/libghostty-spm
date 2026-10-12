@@ -30,17 +30,11 @@
         // the caret off the start; it carries no text, so what the keyboard
         // reads as context is unchanged. Catalyst has no software keyboard
         // and keeps the plain document.
-        #if targetEnvironment(macCatalyst)
-            private static let documentAnchorLength = 0
-        #else
-            private static let documentAnchorLength = 1
-        #endif
-
         /// The UITextInput document. Every `TerminalTextPosition` the view
         /// hands UIKit is a position in it.
         var document: TerminalInputDocument {
             TerminalInputDocument(
-                anchorLength: Self.documentAnchorLength,
+                anchorLength: view?.usesTextInputDocumentAnchor == true ? 1 : 0,
                 markedLength: markedTextState.documentLength,
             )
         }

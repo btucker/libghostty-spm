@@ -250,18 +250,16 @@
 
                 stopMomentumScrolling()
                 surface.sendMousePos(x: point.x, y: point.y, mods: ghostty_input_mods_e(rawValue: 0))
+                let columns = session.nativeViewportColumns()
                 let word = surface.quicklookWord()
                 guard let text = session.readViewportText() else { return }
                 var anchorRange: NSRange?
-                if let word, !text.isEmpty, let size = surface.size() {
-                    let scale = Double(resolvedDisplayScale())
-                    anchorRange = TerminalSelectionAnchor.resolveRange(
-                        in: text,
+                if let word, let columns, !text.isEmpty {
+                    anchorRange = session.viewportTextAnchorRange(
                         word: word.word,
-                        pointX: word.pointX,
-                        pointY: word.pointY,
-                        cellWidthPoints: scale > 0 ? Double(size.cellWidthPixels) / scale : 0,
-                        cellHeightPoints: scale > 0 ? Double(size.cellHeightPixels) / scale : 0
+                        cellOffset: word.offsetStart,
+                        in: text,
+                        expectedColumns: columns
                     )
                 }
                 #if !os(visionOS)

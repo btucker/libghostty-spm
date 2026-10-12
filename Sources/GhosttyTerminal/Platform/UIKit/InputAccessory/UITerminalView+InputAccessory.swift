@@ -5,6 +5,7 @@
 
 #if canImport(UIKit)
     #if !targetEnvironment(macCatalyst)
+        import Foundation
         import GhosttyKit
         import UIKit
 
@@ -155,6 +156,12 @@
                     inputHandler.unmarkText()
                 }
 
+                // Host-managed input can arrive before the view is attached.
+                // Live surfaces retain the native encoder and keyboard modes.
+                if surface == nil, case let .inMemory(session) = configuration.backend {
+                    session.sendInput(Data([byte]))
+                    return
+                }
                 guard surface != nil else { return }
                 var event = ghostty_input_key_s()
                 event.action = GHOSTTY_ACTION_PRESS

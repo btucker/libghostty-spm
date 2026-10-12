@@ -282,7 +282,7 @@ public protocol TerminalSurfaceFontSizeDelegate: TerminalSurfaceViewDelegate {
 
 /// A viewport snapshot requested by a direct-touch long press.
 public struct TerminalTextSelectionRequest: Sendable {
-    /// Viewport rows separated by newlines.
+    /// Logical viewport text, joining soft wraps and preserving hard line breaks.
     public let text: String
     /// Suggested word selection in UTF-16 units; nil means select all.
     public let anchorRange: NSRange?

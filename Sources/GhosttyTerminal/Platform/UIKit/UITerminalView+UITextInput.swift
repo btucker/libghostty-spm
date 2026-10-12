@@ -11,6 +11,11 @@
     struct TextInputBridgeState {
         weak var inputDelegate: (any UITextInputDelegate)?
         weak var softwareInputDelegate: (any TerminalSoftwareInputDelegate)?
+        #if targetEnvironment(macCatalyst)
+            var usesDocumentAnchor = false
+        #else
+            var usesDocumentAnchor = true
+        #endif
         var keyboardInputEnabled = true
         var showsInputAccessory = true
     }

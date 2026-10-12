@@ -21,7 +21,7 @@ struct InMemoryTerminalSessionViewportTests {
         let columns = Int(size.columns)
         harness.receive(String(repeating: "x", count: columns + 5) + "\r\nmain.swift")
 
-        guard let text = harness.session.readViewportText() else {
+        guard let text = harness.session.readViewportRowsText() else {
             Issue.record("viewport read failed")
             return
         }
@@ -32,6 +32,65 @@ struct InMemoryTerminalSessionViewportTests {
         #expect(lines[0] == String(repeating: "x", count: columns))
         #expect(lines[1] == "xxxxx")
         #expect(lines[2] == "main.swift")
+    }
+
+    @Test("Viewport flow joins soft wraps while preserving hard blank rows")
+    func flowJoinsWrapsAndPreservesBlankRows() async throws {
+        let harness = await GhosttySurfaceHarness.make()
+        defer { harness.tearDown() }
+        let size = try #require(harness.surface?.size())
+        let prefix = String(repeating: "a", count: Int(size.columns) + 5)
+        harness.receive(prefix + "\r\n\r\nhttps://one.example/same\r\nhttps://two.example/same")
+        let text = try #require(harness.session.readViewportText())
+        #expect(text.hasPrefix(prefix + "\n\nhttps://one.example/same\nhttps://two.example/same"))
+        let rows = try #require(harness.session.readViewportRowsText()).components(separatedBy: "\n")
+        #expect(rows.count == Int(size.rows))
+        #expect(rows[0] == String(repeating: "a", count: Int(size.columns)))
+        #expect(rows[1] == "aaaaa")
+        #expect(rows[2].isEmpty)
+        #expect(rows[3] == "https://one.example/same")
+        #expect(rows[4] == "https://two.example/same")
+    }
+
+    @Test("Viewport flow anchors preserve duplicate words after soft wraps and wide characters")
+    func flowAnchorMatchesTheNativeCellOffset() async throws {
+        let harness = await GhosttySurfaceHarness.make()
+        defer { harness.tearDown() }
+        let size = try #require(harness.surface?.size())
+        let prefix = String(repeating: "a", count: Int(size.columns) + 5)
+        harness.receive(prefix + "\r\n\r\n你好 cat cat")
+        let text = try #require(harness.session.readViewportText())
+        // Two wide characters, a space, 'cat', then a space: column nine.
+        let offset = UInt32(size.columns) * 3 + 9
+        let range = harness.session.viewportTextAnchorRange(word: "cat", cellOffset: offset, in: text)
+        #expect(range == NSRange(location: prefix.utf16.count + 2 + 7, length: 3))
+        #expect(harness.session.viewportTextAnchorRange(word: "cat", cellOffset: offset, in: "stale") == nil)
+        #expect(harness.session.viewportTextAnchorRange(word: "other", cellOffset: offset, in: text) == nil)
+        #expect(harness.session.viewportTextAnchorRange(
+            word: "cat", cellOffset: offset, in: text, expectedColumns: UInt32(size.columns) + 1
+        ) == nil)
+    }
+
+    @Test("A single-row viewport supplies native columns and a valid flow anchor")
+    func singleRowFlowAnchorUsesNativeColumns() async throws {
+        let replies = TeardownValues<Data>()
+        let harness = ViewportHarness(write: { replies.append($0) })
+        defer { harness.tearDown() }
+        let size = try #require(harness.surface.size())
+        harness.coordinator.viewSize = { (Double(size.widthPixels), Double(size.cellHeightPixels)) }
+        harness.coordinator.fitToSize()
+        let resized = try #require(harness.surface.size())
+        try #require(resized.rows == 1)
+        let bottomRight = "\u{1b}[1;\(resized.columns)R"
+        for _ in 0..<100 where !replies.values.contains(where: { String(decoding: $0, as: UTF8.self).contains(bottomRight) }) {
+            harness.session.receive("\u{1b}[999;999H\u{1b}[6n")
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(replies.values.contains(where: { String(decoding: $0, as: UTF8.self).contains(bottomRight) }))
+        harness.receive("\u{1b}[H\u{1b}[2Jcat cat")
+        let text = try #require(harness.session.readViewportText())
+        #expect(harness.session.nativeViewportColumns() == UInt32(resized.columns))
+        #expect(harness.session.viewportTextAnchorRange(word: "cat", cellOffset: 4, in: text) == NSRange(location: 4, length: 3))
     }
 
     /// Every title, pwd and command mark parsed goes into ghostty's 64-slot
@@ -47,7 +106,7 @@ struct InMemoryTerminalSessionViewportTests {
         harness.session.receive(titles + "done")
         harness.session.waitForPendingOutput()
 
-        let firstLine = harness.session.readViewportText()?
+        let firstLine = harness.session.readViewportRowsText()?
             .components(separatedBy: "\n").first ?? ""
         #expect(firstLine.hasPrefix("done"))
     }
@@ -81,8 +140,8 @@ private final class ViewportHarness {
     let coordinator = TerminalSurfaceCoordinator()
     private let platformView = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
 
-    init() {
-        session = InMemoryTerminalSession(write: { _ in }, resize: { _ in })
+    init(write: @escaping @Sendable (Data) -> Void = { _ in }) {
+        session = InMemoryTerminalSession(write: write, resize: { _ in })
         platformView.wantsLayer = true
         coordinator.isAttached = { true }
         coordinator.scaleFactor = { 1 }

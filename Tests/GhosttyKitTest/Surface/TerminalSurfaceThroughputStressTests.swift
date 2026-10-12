@@ -261,7 +261,7 @@ func settleGrid(_ harness: GhosttySurfaceHarness) async {
 /// Viewport rows with trailing blanks trimmed.
 @MainActor
 func viewportRows(_ session: InMemoryTerminalSession) -> [String] {
-    guard let text = session.readViewportText() else {
+    guard let text = session.readViewportRowsText() else {
         Issue.record("viewport read failed")
         return []
     }

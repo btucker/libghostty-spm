@@ -102,11 +102,24 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
 
     // MARK: - Viewport Read
 
-    /// Returns the active viewport as a UTF-8 string, or `nil` if no surface
-    /// is attached: one line per viewport row, joined with `\n`. The
-    /// `ghostty_text_s` lifecycle (allocate via `ghostty_surface_read_text`,
-    /// free via `ghostty_surface_free_text`) is fully encapsulated — callers
-    /// never touch the C buffer.
+    /// Returns the viewport's logical text, joining soft wraps and preserving
+    /// hard line breaks, or `nil` if no surface is attached. The native linear
+    /// selection reads only the visible viewport, excluding scrollback.
+    /// Use ``readViewportRowsText()`` when indexing by physical screen row.
+    /// The surface stays leased until the native read and buffer release finish.
+    public func readViewportText() -> String? {
+        surfaceAccess.withCurrentSurface { surface in
+            Self.readViewportFlow(on: surface, startingAt: ghostty_point_s(
+                tag: GHOSTTY_POINT_VIEWPORT,
+                coord: GHOSTTY_POINT_COORD_TOP_LEFT,
+                x: 0,
+                y: 0
+            ))?.text
+        } ?? nil
+    }
+
+    /// Returns one line per physical viewport row, joined with `\n`, or `nil`
+    /// if no surface is attached. Soft-wrapped continuations remain separate.
     ///
     /// Each row is its own read, `(VIEWPORT, EXACT (0, y))` to
     /// `(VIEWPORT, EXACT (columns - 1, y))`: a single read over the whole
@@ -117,7 +130,7 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     ///
     /// Thread-safe: keeps the surface alive for the duration of the read,
     /// preventing access against a surface mid-replacement.
-    public func readViewportText() -> String? {
+    public func readViewportRowsText() -> String? {
         surfaceAccess.withCurrentSurface { surface -> String? in
             let size = ghostty_surface_size(surface)
             guard size.columns > 0 else { return "" }
@@ -139,22 +152,95 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
                     rectangle: false,
                 )
 
-                var out = ghostty_text_s()
-                guard ghostty_surface_read_text(surface, selection, &out) else {
-                    return nil
-                }
-                defer { ghostty_surface_free_text(surface, &out) }
-
-                guard let textPtr = out.text, out.text_len > 0 else {
-                    lines.append("")
-                    continue
-                }
-                let bytes = UnsafeBufferPointer(start: textPtr, count: Int(out.text_len))
-                    .map { UInt8(bitPattern: $0) }
-                lines.append(String(decoding: bytes, as: UTF8.self))
+                guard let text = Self.readText(on: surface, selection: selection) else { return nil }
+                lines.append(text.text)
             }
             return lines.joined(separator: "\n")
         } ?? nil
+    }
+
+    /// Native cell coordinates locate a suffix of the same logical snapshot,
+    /// so wraps and wide characters need no guessed UTF-16 column mapping.
+    /// A suffix that no longer matches the supplied snapshot is rejected
+    /// rather than paired with an unrelated range.
+    func nativeViewportColumns() -> UInt32? {
+        surfaceAccess.withCurrentSurface { Self.nativeViewportColumns(on: $0) } ?? nil
+    }
+
+    func viewportTextAnchorRange(
+        word: String,
+        cellOffset: UInt32,
+        in text: String,
+        expectedColumns: UInt32? = nil
+    ) -> NSRange? {
+        guard !word.isEmpty else { return nil }
+        return surfaceAccess.withCurrentSurface { surface -> NSRange? in
+            guard let columns = Self.nativeViewportColumns(on: surface),
+                  expectedColumns == nil || expectedColumns == columns
+            else { return nil }
+            let start = ghostty_point_s(
+                tag: GHOSTTY_POINT_VIEWPORT,
+                coord: GHOSTTY_POINT_COORD_EXACT,
+                x: cellOffset % columns,
+                y: cellOffset / columns
+            )
+            guard let suffix = Self.readViewportFlow(on: surface, startingAt: start),
+                  suffix.cellOffset == cellOffset,
+                  suffix.text.utf8.starts(with: word.utf8),
+                  text.utf8.suffix(suffix.text.utf8.count).elementsEqual(suffix.text.utf8)
+            else { return nil }
+            return NSRange(location: text.utf16.count - suffix.text.utf16.count, length: word.utf16.count)
+        } ?? nil
+    }
+
+    private struct ViewportRead {
+        let text: String
+        let cellOffset: UInt32
+        let cellLength: UInt32
+    }
+
+    private static func nativeViewportColumns(on surface: ghostty_surface_t) -> UInt32? {
+        // Native offsets use parser columns, which can lag the UI grid during
+        // asynchronous resize. The first cell of row one reveals that width.
+        let point = ghostty_point_s(tag: GHOSTTY_POINT_VIEWPORT, coord: GHOSTTY_POINT_COORD_EXACT, x: 0, y: 1)
+        guard let row = readText(on: surface, selection: ghostty_selection_s(
+            top_left: point, bottom_right: point, rectangle: false
+        )) else { return nil }
+        if row.cellOffset > 0 { return row.cellOffset }
+        // Native coordinates clamp row one to row zero on a single-row grid.
+        // Its full viewport span then directly supplies columns minus one.
+        guard let full = readViewportFlow(on: surface, startingAt: ghostty_point_s(
+            tag: GHOSTTY_POINT_VIEWPORT, coord: GHOSTTY_POINT_COORD_TOP_LEFT, x: 0, y: 0
+        )), full.cellOffset == 0, full.cellLength < UInt32.max else { return nil }
+        return full.cellLength + 1
+    }
+
+    private static func readViewportFlow(on surface: ghostty_surface_t, startingAt start: ghostty_point_s) -> ViewportRead? {
+        readText(on: surface, selection: ghostty_selection_s(
+            top_left: start,
+            bottom_right: ghostty_point_s(
+                tag: GHOSTTY_POINT_VIEWPORT,
+                coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
+                x: 0,
+                y: 0
+            ),
+            rectangle: false
+        ))
+    }
+
+    private static func readText(on surface: ghostty_surface_t, selection: ghostty_selection_s) -> ViewportRead? {
+        var out = ghostty_text_s()
+        guard ghostty_surface_read_text(surface, selection, &out) else { return nil }
+        defer { ghostty_surface_free_text(surface, &out) }
+        let text: String
+        if let textPtr = out.text, out.text_len > 0 {
+            let bytes = UnsafeBufferPointer(start: textPtr, count: Int(out.text_len))
+                .map { UInt8(bitPattern: $0) }
+            text = String(decoding: bytes, as: UTF8.self)
+        } else {
+            text = ""
+        }
+        return ViewportRead(text: text, cellOffset: out.offset_start, cellLength: out.offset_len)
     }
 
     func updateViewport(_ size: TerminalGridMetrics) {

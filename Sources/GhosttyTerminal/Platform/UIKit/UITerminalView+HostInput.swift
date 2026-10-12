@@ -21,6 +21,14 @@
             }
         }
 
+        /// Hosts supplying their own retained UITextInput document can disable
+        /// the synthetic position used to keep software-keyboard Delete repeating.
+        /// Configure this before editing; the default is enabled on iOS.
+        public var usesTextInputDocumentAnchor: Bool {
+            get { textInputBridge.usesDocumentAnchor }
+            set { textInputBridge.usesDocumentAnchor = newValue }
+        }
+
         public var isKeyboardInputEnabled: Bool {
             get { textInputBridge.keyboardInputEnabled }
             set {

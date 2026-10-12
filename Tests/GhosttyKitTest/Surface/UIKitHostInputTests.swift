@@ -115,6 +115,44 @@
             }
         #endif
 
+        #if !targetEnvironment(macCatalyst)
+            @Test func retainedHostDocumentUsesZeroBasedMarkedPositions() throws {
+                let view = UITerminalView(frame: .zero)
+                let delegate = HostInputProbe()
+                view.softwareInputDelegate = delegate
+                #expect(view.usesTextInputDocumentAnchor)
+                #expect(view.inputHandler.document.anchorLength == 1)
+                view.usesTextInputDocumentAnchor = false
+                #expect(view.inputHandler.document.anchorLength == 0)
+                view.setMarkedText("abc", selectedRange: NSRange(location: 3, length: 0))
+                let caret = try #require(view.position(from: view.beginningOfDocument, offset: 2))
+                view.selectedTextRange = view.textRange(from: caret, to: caret)
+                view.toggleStickyModifier(.ctrl)
+                view.deleteBackward()
+                #expect(view.text(in: try #require(view.markedTextRange)) == "ac")
+                #expect(view.inputHandler.selectedTextRange().location == 1)
+                #expect(view.stickyActivation(for: .ctrl) == .armed)
+                view.unmarkText()
+                #expect(delegate.text == ["ac"])
+                #expect(view.stickyActivation(for: .ctrl) == .armed)
+            }
+
+            @Test func detachedStickyControlLettersReachHostManagedSession() {
+                let view = UITerminalView(frame: .zero)
+                let output = HostInputBytes()
+                let session = InMemoryTerminalSession(write: { output.append($0) }, resize: { _ in })
+                view.configuration = .init(backend: .inMemory(session))
+                #expect(view.surface == nil)
+                for letter in ["a", "j", "z"] {
+                    view.toggleStickyModifier(.ctrl)
+                    view.insertText(letter)
+                    #expect(view.stickyActivation(for: .ctrl) == .inactive)
+                    view.resetStickyModifiers()
+                }
+                #expect(output.values == [Data([0x01]), Data([0x0a]), Data([0x1a])])
+            }
+        #endif
+
         @Test func hostCanOwnHardwareRepeat() {
             let view = UITerminalView(frame: .zero)
             #expect(view.automaticallyRepeatsHardwareKeys)
@@ -156,6 +194,21 @@
         func terminalView(_ view: UITerminalView, handleHardwareKey event: TerminalHardwareKeyEvent) -> Bool {
             keys.append(event)
             return true
+        }
+    }
+
+    private final class HostInputBytes: @unchecked Sendable {
+        private let lock = NSLock()
+        private var bytes: [Data] = []
+        var values: [Data] {
+            lock.lock()
+            defer { lock.unlock() }
+            return bytes
+        }
+        func append(_ data: Data) {
+            lock.lock()
+            defer { lock.unlock() }
+            bytes.append(data)
         }
     }
 
