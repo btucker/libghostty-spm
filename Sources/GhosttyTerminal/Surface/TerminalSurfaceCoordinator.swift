@@ -48,6 +48,8 @@ final class TerminalSurfaceCoordinator {
     let bridge = TerminalCallbackBridge()
     private var surfaceController: TerminalController?
     private var surfaceSession: InMemoryTerminalSession?
+    private var isTearingDown = false
+    private var isRebuilding = false
 
     /// Embedder-controlled render throttle. While `.reduced`, scheduled
     /// render wakeups are coalesced to at most one per interval.
@@ -146,6 +148,20 @@ final class TerminalSurfaceCoordinator {
     // MARK: - Surface Lifecycle
 
     func rebuildIfReady(removingBridgeFrom previousController: TerminalController? = nil) {
+        // Draining a shared app can run another surface's delegate. Coalesce
+        // changes it makes here until the retiring surface is fully released.
+        guard !isTearingDown, !isRebuilding else {
+            if !pendingRebuild {
+                pendingRebuild = true
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.pendingRebuild else { return }
+                    self.rebuildIfReady()
+                }
+            }
+            return
+        }
+        isRebuilding = true
+        defer { isRebuilding = false }
         // A pane that is detached or merely hidden reports no usable rendering
         // destination. Tearing the surface down inside that transition can free
         // a renderer while Core Animation still has callbacks queued against
@@ -173,6 +189,9 @@ final class TerminalSurfaceCoordinator {
         tearDownSurface(
             removingBridgeFrom: surfaceController ?? previousController ?? controller
         )
+        // This rebuild consumes any configuration/controller changes made
+        // while the old surface's mailbox was being drained.
+        pendingRebuild = false
         guard let controller else {
             TerminalDebugLog.log(.lifecycle, "surface rebuild skipped: missing controller")
             return
@@ -191,13 +210,15 @@ final class TerminalSurfaceCoordinator {
         }
 
         let scale = scaleFactor()
+        let surfaceConfiguration = configuration
+        bridge.isRetiring = false
         TerminalDebugLog.log(
             .lifecycle,
             "surface rebuild scale=\(String(format: "%.2f", scale)) \(configuration.debugSummary)"
         )
         let rawSurface = controller.createSurface(
             bridge: bridge,
-            configuration: configuration,
+            configuration: surfaceConfiguration,
             platformSetup: { [self] config in
                 platformSetup?(&config)
                 config.scale_factor = scale
@@ -212,7 +233,7 @@ final class TerminalSurfaceCoordinator {
         let newSurface = TerminalSurface(rawSurface)
         surface = newSurface
         surfaceController = controller
-        surfaceSession = configuration.inMemorySession
+        surfaceSession = surfaceConfiguration.inMemorySession
         newSurface.setOcclusion(effectiveSurfaceVisible)
         controller.shouldProcessWakeup = { [weak self] in
             self?.canRenderFrame == true
@@ -504,6 +525,10 @@ final class TerminalSurfaceCoordinator {
     // MARK: - Cleanup
 
     func freeSurface() {
+        guard !isRebuilding else {
+            DispatchQueue.main.async { [weak self] in self?.freeSurface() }
+            return
+        }
         TerminalDebugLog.log(.lifecycle, "free surface")
         tearDownSurface(removingBridgeFrom: controller)
     }
@@ -520,16 +545,23 @@ final class TerminalSurfaceCoordinator {
     }
 
     private func tearDownSurface(removingBridgeFrom controller: TerminalController?) {
+        guard !isTearingDown else { return }
+        isTearingDown = true
+        defer { isTearingDown = false }
         TerminalDebugLog.log(.lifecycle, "tear down surface")
         let owningController = surfaceController ?? controller
         scheduledTickGeneration &+= 1
         tickScheduled = false
+        // A tick can deliver actions, close requests, and render callbacks.
+        // Silence this bridge before pumping; its native userdata remains
+        // retained by the owning controller until the surface has been freed.
+        bridge.isRetiring = true
+        bridge.rawSurface = nil
+        owningController?.onWakeup = nil
+        owningController?.shouldProcessWakeup = nil
         if let session = surfaceSession {
             session.clearSurface(ifMatches: surface?.rawValue)
         }
-        owningController?.onWakeup = nil
-        owningController?.shouldProcessWakeup = nil
-        bridge.rawSurface = nil
         let hadSurface = surface != nil
         surface?.setFocus(false)
         surface?.free()
