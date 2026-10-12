@@ -69,16 +69,23 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
 
     // MARK: - Surface Lifecycle
 
-    func setSurface(_ surface: ghostty_surface_t?) {
-        surfaceAccess.setSurface(surface)
+    func setSurface(
+        _ surface: ghostty_surface_t?,
+        processMailbox: (() -> Void)? = nil,
+        whileWaiting progress: () -> Void = {}
+    ) {
+        surfaceAccess.setSurface(surface, processMailbox: processMailbox, whileWaiting: progress)
         TerminalDebugLog.log(
             .lifecycle,
             "in-memory session surface=\(surface == nil ? "nil" : "set")",
         )
     }
 
-    func clearSurface(ifMatches expectedSurface: ghostty_surface_t?) {
-        guard surfaceAccess.clearSurface(ifMatches: expectedSurface) else {
+    func clearSurface(
+        ifMatches expectedSurface: ghostty_surface_t?,
+        whileWaiting progress: () -> Void = {}
+    ) {
+        guard surfaceAccess.clearSurface(ifMatches: expectedSurface, whileWaiting: progress) else {
             TerminalDebugLog.log(
                 .lifecycle,
                 "in-memory session clear skipped expected=\(expectedSurface == nil ? "nil" : "set") current=\(surfaceAccess.currentSurface == nil ? "nil" : "set")",

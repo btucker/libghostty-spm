@@ -14,17 +14,21 @@ final class GhosttySurfaceHarness {
     private static var isOccupied = false
     private static var waiters: [CheckedContinuation<Void, Never>] = []
 
-    static func make() async -> GhosttySurfaceHarness {
+    static func acquireTurn() async {
         if isOccupied {
             await withCheckedContinuation { waiters.append($0) }
         } else {
             isOccupied = true
         }
+    }
+
+    static func make() async -> GhosttySurfaceHarness {
+        await acquireTurn()
         return GhosttySurfaceHarness()
     }
 
     /// Hands the turn straight to the next waiter, so it stays occupied.
-    private static func leave() {
+    static func releaseTurn() {
         if waiters.isEmpty {
             isOccupied = false
         } else {
@@ -71,7 +75,7 @@ final class GhosttySurfaceHarness {
         coordinator.freeSurface()
         if holdsTurn {
             holdsTurn = false
-            Self.leave()
+            Self.releaseTurn()
         }
     }
 

@@ -178,6 +178,8 @@
                 // scrolling a detached surface until the fling decays.
                 stopMomentumScrolling(sendTerminalEndEvent: false)
                 core.stopDisplayLink()
+                core.setFocus(false)
+                core.retainThroughCurrentTransaction()
             }
         }
 

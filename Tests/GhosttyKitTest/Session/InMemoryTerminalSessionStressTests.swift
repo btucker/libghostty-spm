@@ -186,7 +186,7 @@ struct InMemoryTerminalSessionStressTests {
         }
 
         #expect(sink.byteCount == chunk.count * chunks)
-        #expect(sink.writeCount == chunks)
+        #expect(sink.writeCount == chunks * chunk.count / InMemoryTerminalSurfaceAccess.maximumWriteSize)
         #expect(elapsed < .seconds(5), "10 MiB took \(elapsed)")
     }
 

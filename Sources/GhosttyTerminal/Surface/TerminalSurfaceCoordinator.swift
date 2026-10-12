@@ -8,6 +8,16 @@
 import DisplayLink
 import Foundation
 import GhosttyKit
+import QuartzCore
+
+private final class TerminalTransactionRetirement: NSObject {
+    let owner: AnyObject
+
+    init(owner: AnyObject) {
+        self.owner = owner
+        super.init()
+    }
+}
 
 /// Shared terminal state and logic used by both UIKit and AppKit views.
 ///
@@ -41,6 +51,10 @@ final class TerminalSurfaceCoordinator {
     /// already holds the new backend, and a swap to another session or to
     /// `.exec` would otherwise free a surface the old session still uses.
     private var surfaceSession: InMemoryTerminalSession?
+    private var surfaceController: TerminalController?
+    private var isTearingDown = false
+    private var isRebuilding = false
+    private var transactionRetentionSequence = 0
     let bridge = TerminalCallbackBridge()
 
     // MARK: - Platform Hooks
@@ -160,18 +174,40 @@ final class TerminalSurfaceCoordinator {
 
     // MARK: - Surface Lifecycle
 
+    /// Keep the renderer alive through the Core Animation commit using its
+    /// layers. Unique transaction values preserve the host's completion block.
+    func retainThroughCurrentTransaction() {
+        transactionRetentionSequence &+= 1
+        let retirement = TerminalTransactionRetirement(owner: self)
+        CATransaction.setValue(
+            retirement,
+            forKey: "net.graftty.surface-retirement-\(ObjectIdentifier(self))-\(transactionRetentionSequence)"
+        )
+        DispatchQueue.main.async {
+            CATransaction.flush()
+            DispatchQueue.main.async {
+                withExtendedLifetime(retirement) {}
+            }
+        }
+    }
+
     func rebuildIfReady(removingBridgeFrom previousController: TerminalController? = nil) {
-        // A pane that is merely hidden reports a zero size. Tearing the surface
-        // down here and then bailing out at the size guard below would destroy
-        // ghostty's grid and scrollback for a condition that is temporary: when
-        // the pane comes back there is nothing left to show, and only the app
-        // redrawing can refill it. Keep the surface — the caller re-runs this
-        // once the view has a usable size again.
-        //
-        // This is the same intent as the reattach guard in viewDidMoveToWindow
-        // ("rebuilding on every reattach discards Ghostty's scrollback/state"),
-        // which cannot help while the teardown happens before the checks.
-        if surface != nil, previousController == nil, !hasValidViewSize {
+        guard !isTearingDown, !isRebuilding else {
+            if !pendingRebuild {
+                pendingRebuild = true
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.pendingRebuild else { return }
+                    self.rebuildIfReady()
+                }
+            }
+            return
+        }
+        isRebuilding = true
+        defer { isRebuilding = false }
+        // A detached view can retain valid stale bounds while Core Animation
+        // commits its old layers. Defer every rebuild, including controller
+        // changes, until attached at a usable size again.
+        if surface != nil, !isAttached() || !hasValidViewSize {
             // The rebuild is owed, not cancelled. Configuration options are
             // consumed only by createSurface, and no caller re-runs this once
             // the view regains a size (fitToSize, viewDidMoveToWindow and the
@@ -182,14 +218,15 @@ final class TerminalSurfaceCoordinator {
             let size = viewSize()
             TerminalDebugLog.log(
                 .lifecycle,
-                "surface kept: view size temporarily invalid \(String(format: "%.2f", size.width))x\(String(format: "%.2f", size.height))",
+                "surface kept: rebuild deferred attached=\(isAttached()) size=\(String(format: "%.2f", size.width))x\(String(format: "%.2f", size.height))",
             )
 
             return
         }
         pendingRebuild = false
 
-        tearDownSurface(removingBridgeFrom: previousController ?? controller)
+        tearDownSurface(removingBridgeFrom: surfaceController ?? previousController ?? controller)
+        pendingRebuild = false
         guard let controller else {
             TerminalDebugLog.log(.lifecycle, "surface rebuild skipped: missing controller")
             return
@@ -208,13 +245,15 @@ final class TerminalSurfaceCoordinator {
         }
 
         let scale = scaleFactor()
+        let surfaceConfiguration = configuration
+        bridge.isRetiring = false
         TerminalDebugLog.log(
             .lifecycle,
             "surface rebuild scale=\(String(format: "%.2f", scale)) \(configuration.debugSummary)",
         )
         let rawSurface = controller.createSurface(
             bridge: bridge,
-            configuration: configuration,
+            configuration: surfaceConfiguration,
             platformSetup: { [self] config in
                 platformSetup?(&config)
                 config.scale_factor = scale
@@ -228,7 +267,8 @@ final class TerminalSurfaceCoordinator {
         bridge.rawSurface = rawSurface
         let newSurface = TerminalSurface(rawSurface)
         surface = newSurface
-        surfaceSession = configuration.inMemorySession
+        surfaceController = controller
+        surfaceSession = surfaceConfiguration.inMemorySession
         newSurface.setOcclusion(effectiveSurfaceVisible)
         // Wakeups must keep draining while the surface is merely occluded:
         // the app mailbox (titles, pwd, bell, child-exit) only empties in
@@ -584,6 +624,10 @@ final class TerminalSurfaceCoordinator {
     // MARK: - Cleanup
 
     func freeSurface() {
+        guard !isRebuilding else {
+            DispatchQueue.main.async { [weak self] in self?.freeSurface() }
+            return
+        }
         TerminalDebugLog.log(.lifecycle, "free surface")
         tearDownSurface(removingBridgeFrom: controller)
     }
@@ -600,6 +644,10 @@ final class TerminalSurfaceCoordinator {
     }
 
     private func tearDownSurface(removingBridgeFrom controller: TerminalController?) {
+        guard !isTearingDown else { return }
+        isTearingDown = true
+        defer { isTearingDown = false }
+        let owningController = surfaceController ?? controller
         TerminalDebugLog.log(.lifecycle, "tear down surface")
         releaseDisplayLink()
         // Held to the end: ghostty's IO thread calls the session as
@@ -609,9 +657,10 @@ final class TerminalSurfaceCoordinator {
         // still queue a focus report for that thread to write.
         let session = surfaceSession
         defer { withExtendedLifetime(session) {} }
+        bridge.isRetiring = true
+        owningController?.removeWakeupObserver(ObjectIdentifier(self))
         session?.clearSurface(ifMatches: surface?.rawValue)
         surfaceSession = nil
-        controller?.removeWakeupObserver(ObjectIdentifier(self))
         // Must run before rawSurface is cleared: a clipboard-read
         // confirmation still awaiting the host's answer must resolve to a
         // deny before the surface it names goes away, or the requesting
@@ -637,7 +686,8 @@ final class TerminalSurfaceCoordinator {
         resizeThrottleArmed = false
         resizeThrottleTrailing = false
         pendingImmediateTick = true
-        controller?.remove(bridge)
+        owningController?.remove(bridge)
+        surfaceController = nil
         if hadSurface {
             (delegate as? any TerminalSurfaceLifecycleDelegate)?
                 .terminalDidDetachSurface()

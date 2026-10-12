@@ -134,10 +134,10 @@ struct InMemoryTerminalSessionPendingWriteTests {
         session.setSurface(testSurface(0x40))
         session.waitForPendingOutput()
 
-        let flushed = writes.values
-        #expect(flushed.count == 1)
-        #expect(flushed.first?.count == limit)
-        #expect(flushed.first?.suffix(4096) == Data(repeating: UInt8(ascii: "b"), count: 4096))
+        let flushed = writes.values.reduce(into: Data()) { $0.append($1) }
+        #expect(flushed.count == limit)
+        #expect(flushed.prefix(limit - 4096) == Data(repeating: UInt8(ascii: "a"), count: limit - 4096))
+        #expect(flushed.suffix(4096) == Data(repeating: UInt8(ascii: "b"), count: 4096))
     }
 }
 

@@ -57,9 +57,17 @@ struct InMemoryTerminalPendingOperations {
         writeByteCount += data.count
     }
 
-    mutating func popFirst() -> Operation? {
+    mutating func popFirst(maximumWriteSize: Int = .max) -> Operation? {
         while head < storage.count {
             let entry = storage[head]
+            if let entry, case let .write(data) = entry.operation, data.count > maximumWriteSize {
+                let split = data.startIndex + maximumWriteSize
+                storage[head] = Entry(operation: .write(data[split...]), sequence: entry.sequence)
+                writeByteCount -= maximumWriteSize
+                // Retire the sequence only after its last chunk. Unconsumed
+                // chunks keep their position and survive a surface rebuild.
+                return .write(Data(data[..<split]))
+            }
             storage[head] = nil
             head += 1
             guard let entry else { continue }

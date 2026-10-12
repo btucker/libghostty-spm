@@ -175,7 +175,7 @@ extension TerminalController {
         retain(bridge)
 
         if case let .inMemory(session) = configuration.backend {
-            session.setSurface(surface)
+            session.setSurface(surface, processMailbox: { [weak self] in self?.tick() })
         }
 
         holdFontSize(of: surface, from: configuration)

@@ -3,6 +3,7 @@ import GhosttyKit
 
 /// Serializes host output while keeping the raw surface alive for each C call.
 final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
+    static let maximumWriteSize = 4096
     typealias Write = @Sendable (ghostty_surface_t, Data) -> Void
     typealias ProcessExit = @Sendable (ghostty_surface_t, UInt32, UInt64) -> Void
     typealias Tick = @Sendable (ghostty_surface_t) -> Void
@@ -16,9 +17,22 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
     private let processExit: ProcessExit
     private let tick: Tick
 
-    private var surface: ghostty_surface_t?
-    /// Prevents the caller from freeing a surface while a C operation uses it.
-    private var activeOperations = 0
+    /// Lease state is protected by `condition`. Mailbox callbacks run only
+    /// during main-thread waits, with the condition unlocked.
+    private final class SurfaceLease {
+        let rawValue: ghostty_surface_t
+        let processMailbox: () -> Void
+        var activeOperations = 0
+
+        init(_ rawValue: ghostty_surface_t, processMailbox: @escaping () -> Void) {
+            self.rawValue = rawValue
+            self.processMailbox = processMailbox
+        }
+    }
+
+    private var surface: SurfaceLease?
+    private var retiringSurfaces: [ghostty_surface_t: SurfaceLease] = [:]
+    private var generation: UInt64 = 0
     /// Host output in arrival order, not yet handed to a surface. Each entry
     /// is consumed by whichever surface is attached when the output queue
     /// reaches it, so output queued behind a slow parse survives a surface
@@ -44,6 +58,7 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
     /// that is itself waiting for the tick, so the main thread waits in
     /// slices and ticks between them.
     private static let mainThreadPollInterval: TimeInterval = 0.01
+    private static let retirementPollInterval: TimeInterval = 0.001
     /// A drain block is in the output queue. One block works through the
     /// backlog instead of one block per `receive`: a flood of small writes
     /// queued a block per write, and the blocks outlived the bytes.
@@ -63,22 +78,35 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
     init(
         write: @escaping Write,
         processExit: @escaping ProcessExit,
-        tick: @escaping Tick,
+        tick: @escaping Tick = { _ in },
     ) {
         self.write = write
         self.processExit = processExit
         self.tick = tick
     }
 
-    func setSurface(_ surface: ghostty_surface_t?) {
+    func setSurface(
+        _ surface: ghostty_surface_t?,
+        processMailbox: (() -> Void)? = nil,
+        whileWaiting progress: () -> Void = {}
+    ) {
         condition.lock()
         let previous = self.surface
+        generation &+= 1
+        let replacementGeneration = generation
         self.surface = nil
-        waitForActiveOperations(ticking: previous)
-        self.surface = surface
+        retire(previous)
+        waitForActiveOperations(on: previous, progress: progress)
+        // A native callback may have installed a newer surface while this
+        // wait released the condition. The older replacement must not win.
+        if generation == replacementGeneration {
+            self.surface = surface.map { raw in
+                SurfaceLease(raw, processMailbox: processMailbox ?? { [tick] in tick(raw) })
+            }
+        }
         // Drains scheduled while detached ran without consuming anything, so
         // give every waiting operation a drain of its own.
-        if surface != nil {
+        if self.surface != nil {
             if pendingTrimOwed {
                 pendingTrimOwed = false
                 operations.trimWrites(toLimit: Self.pendingWriteByteLimit)
@@ -91,23 +119,34 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
     }
 
     @discardableResult
-    func clearSurface(ifMatches expectedSurface: ghostty_surface_t?) -> Bool {
+    func clearSurface(
+        ifMatches expectedSurface: ghostty_surface_t?,
+        whileWaiting progress: () -> Void = {}
+    ) -> Bool {
         condition.lock()
-        guard surface == expectedSurface else {
+        guard let expectedSurface else {
+            let alreadyClear = surface == nil
             condition.unlock()
-            return false
+            return alreadyClear
         }
-
-        surface = nil
-        waitForActiveOperations(ticking: expectedSurface)
+        let matches = surface?.rawValue == expectedSurface
+        let previous = matches ? surface : retiringSurfaces[expectedSurface]
+        if matches {
+            generation &+= 1
+            surface = nil
+            retire(previous)
+        }
+        // Replacement publishes nil before waiting. A stale owner still
+        // joins its own calls before freeing, without clearing the new one.
+        waitForActiveOperations(on: previous, progress: progress)
         condition.unlock()
-        return true
+        return matches
     }
 
     var currentSurface: ghostty_surface_t? {
         condition.lock()
         defer { condition.unlock() }
-        return surface
+        return surface?.rawValue
     }
 
     func enqueueWrite(_ data: Data) {
@@ -168,11 +207,11 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
             condition.unlock()
             return nil
         }
-        activeOperations += 1
+        surface.activeOperations += 1
         condition.unlock()
 
-        defer { finishOperation() }
-        return operation(surface)
+        defer { finishOperation(on: surface) }
+        return operation(surface.rawValue)
     }
 
     /// Returns false when output is still waiting for a surface to attach:
@@ -225,7 +264,7 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
         let current = surface
         condition.unlock()
         if let current {
-            tick(current)
+            current.processMailbox()
         }
     }
 
@@ -253,20 +292,20 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
     /// False once nothing is left to hand over, with the drain unscheduled.
     private func drainOne() -> Bool {
         condition.lock()
-        guard let surface, let operation = operations.popFirst() else {
+        guard let surface, let operation = operations.popFirst(maximumWriteSize: Self.maximumWriteSize) else {
             isDrainScheduled = false
             condition.unlock()
             return false
         }
-        activeOperations += 1
+        surface.activeOperations += 1
         condition.unlock()
 
-        defer { finishOperation() }
+        defer { finishOperation(on: surface) }
         switch operation {
         case let .write(data):
-            write(surface, data)
+            write(surface.rawValue, data)
         case let .processExit(exitCode, runtimeMilliseconds):
-            processExit(surface, exitCode, runtimeMilliseconds)
+            processExit(surface.rawValue, exitCode, runtimeMilliseconds)
         }
         return true
     }
@@ -287,10 +326,13 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
         return { handler(backlogged) }
     }
 
-    private func finishOperation() {
+    private func finishOperation(on surface: SurfaceLease) {
         condition.lock()
-        activeOperations -= 1
-        if activeOperations == 0 {
+        surface.activeOperations -= 1
+        if surface.activeOperations == 0 {
+            if retiringSurfaces[surface.rawValue] === surface {
+                retiringSurfaces.removeValue(forKey: surface.rawValue)
+            }
             condition.broadcast()
         }
         let backlogChange = takeBacklogChange()
@@ -298,19 +340,27 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
         backlogChange?()
     }
 
-    /// Called with the lock held. `previous` is the surface the in-flight
-    /// operations use; the caller frees it only after this returns.
-    private func waitForActiveOperations(ticking previous: ghostty_surface_t?) {
-        while activeOperations > 0 {
-            guard Thread.isMainThread, let previous else {
+    private func retire(_ surface: SurfaceLease?) {
+        guard let surface, surface.activeOperations > 0 else { return }
+        retiringSurfaces[surface.rawValue] = surface
+    }
+
+    /// Called with the lock held. The owner frees its surface only after all
+    /// operations using this lease have finished, including reentrant joins.
+    private func waitForActiveOperations(on previous: SurfaceLease?, progress: () -> Void) {
+        guard let previous else { return }
+        while previous.activeOperations > 0 {
+            guard Thread.isMainThread else {
                 condition.wait()
                 continue
             }
-            _ = condition.wait(until: Date(timeIntervalSinceNow: Self.mainThreadPollInterval))
-            guard activeOperations > 0 else { return }
             condition.unlock()
-            tick(previous)
+            previous.processMailbox()
+            progress()
             condition.lock()
+            if previous.activeOperations > 0 {
+                _ = condition.wait(until: Date(timeIntervalSinceNow: Self.retirementPollInterval))
+            }
         }
     }
 }
