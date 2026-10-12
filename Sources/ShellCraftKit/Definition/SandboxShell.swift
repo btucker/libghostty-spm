@@ -6,7 +6,7 @@ public let defaultSandboxShell = ShellDefinition(
     welcomeMessage: SandboxShellStyle.welcomeMessage,
     fallback: { command in
         "\(SandboxShellStyle.error)\(command)\(SandboxShellStyle.reset): command not found"
-    }
+    },
 ) {
     ShellCommand("echo", summary: "Echo text back") { context in
         .output(context.arguments + "\r\n")
@@ -36,7 +36,7 @@ public let defaultSandboxShell = ShellDefinition(
         let size = context.terminalSize
         return .output(
             "columns: \(size.columns), rows: \(size.rows), " +
-                "pixels: \(size.widthPixels)x\(size.heightPixels)\r\n"
+                "pixels: \(size.widthPixels)x\(size.heightPixels)\r\n",
         )
     }
     ShellCommand("clear", summary: "Clear the screen") { _ in
@@ -52,11 +52,14 @@ public let defaultSandboxShell = ShellDefinition(
 
 public let sandboxShell = defaultSandboxShell
 
+/// ANSI palette slots, not fixed 256-color indices: a theme picks its
+/// blue/yellow/red to read on its own background, and a fixed light yellow
+/// (`38;5;221`) vanished on every light theme.
 private enum SandboxShellStyle {
     static let reset = "\u{1B}[0m"
-    static let accent = "\u{1B}[38;5;110m"
-    static let highlight = "\u{1B}[38;5;221m"
-    static let error = "\u{1B}[38;5;203m"
+    static let accent = "\u{1B}[34m"
+    static let highlight = "\u{1B}[33m"
+    static let error = "\u{1B}[31m"
     static let emphasis = "\u{1B}[1m"
 
     static let prompt = "\(accent)sandbox\(reset)@\(highlight)ghostty\(reset) % "
@@ -64,7 +67,7 @@ private enum SandboxShellStyle {
     static let welcomeMessage = """
     \r\n  \(emphasis)\(accent)GhosttyKit Sandbox Demo\(reset)\r
     \r\n  This terminal runs inside App Sandbox.\r
-      \(accent)No subprocesses are spawned.\(reset)\r
+      \(accent)No real processes are started.\(reset)\r
       Type '\(highlight)help\(reset)' for available commands.\r\n\r\n
     """
 }

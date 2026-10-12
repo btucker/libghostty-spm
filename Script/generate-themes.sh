@@ -14,7 +14,7 @@ trap 'rm -rf "$TEMP_DIR"' EXIT
 mkdir -p "$OUTPUT_DIR"
 
 # Fetch the list of theme files from GitHub API
-echo "[+] fetching theme list from github api"
+echo "[+] fetching theme list from GitHub API…"
 curl -sL "https://api.github.com/repos/mbadolato/iTerm2-Color-Schemes/contents/ghostty" \
     | python3 -c "
 import json, sys
@@ -28,7 +28,7 @@ THEME_COUNT=$(wc -l < "$TEMP_DIR/theme_list.txt" | tr -d ' ')
 echo "[+] found $THEME_COUNT themes"
 
 # Download all themes
-echo "[+] downloading themes"
+echo "[+] downloading themes…"
 mkdir -p "$TEMP_DIR/themes"
 while IFS= read -r name; do
     encoded_name=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$name'))")
@@ -43,7 +43,7 @@ wait
 echo "[+] downloaded all themes"
 
 # Generate Swift files using Python
-echo "[+] generating swift source files"
+echo "[+] generating Swift source files…"
 python3 - "$TEMP_DIR/themes" "$OUTPUT_DIR" "$TEMP_DIR/theme_list.txt" << 'PYEOF'
 import os, sys, re, string
 
@@ -101,7 +101,7 @@ def swift_identifier(name):
 def swift_string(s):
     return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
-def optional_field(data, ghostty_key, swift_type="String"):
+def optional_field(data, ghostty_key):
     val = data.get(ghostty_key)
     if val:
         return swift_string(val)
@@ -133,12 +133,7 @@ for name in sorted(theme_names, key=str.lower):
         first_char = 'Symbols'
 
     palette = data.get('_palette', {})
-    palette_str = '['
-    for i in sorted(palette.keys()):
-        palette_str += f'{i}: {swift_string(palette[i])}, '
-    if palette_str.endswith(', '):
-        palette_str = palette_str[:-2]
-    palette_str += ']'
+    palette_str = '[' + ', '.join(f'{i}: {swift_string(palette[i])}' for i in sorted(palette)) + ']'
 
     entry = {
         'name': name,
@@ -150,7 +145,6 @@ for name in sorted(theme_names, key=str.lower):
         'selectionBackground': optional_field(data, 'selection-background'),
         'selectionForeground': optional_field(data, 'selection-foreground'),
         'palette': palette_str,
-        'group': first_char,
     }
 
     groups.setdefault(first_char, []).append(entry)

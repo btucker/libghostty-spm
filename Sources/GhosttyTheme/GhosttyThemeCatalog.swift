@@ -3,6 +3,8 @@
 //  libghostty-spm
 //
 
+import Foundation
+
 public enum GhosttyThemeCatalog {
     public static func theme(named name: String) -> GhosttyThemeDefinition? {
         allThemes.first { $0.name == name }

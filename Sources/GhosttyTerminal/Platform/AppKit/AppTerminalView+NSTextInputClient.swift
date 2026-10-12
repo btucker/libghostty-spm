@@ -5,69 +5,70 @@
 //  Created by Lakr233 on 2026/3/17.
 //
 
-#if canImport(AppKit) && !canImport(UIKit)
+#if !canImport(UIKit) && canImport(AppKit)
     import AppKit
 
     extension AppTerminalView: @preconcurrency NSTextInputClient {
-        public func insertText(_ string: Any, replacementRange _: NSRange) {
+        open func insertText(_ string: Any, replacementRange _: NSRange) {
             inputHandler?.inputMethodHandler?.insertText(string)
         }
 
-        public func setMarkedText(
+        open func setMarkedText(
             _ string: Any,
             selectedRange: NSRange,
-            replacementRange _: NSRange
+            replacementRange _: NSRange,
         ) {
             inputHandler?.inputMethodHandler?.setMarkedText(
                 string,
-                selectedRange: selectedRange
+                selectedRange: selectedRange,
             )
         }
 
-        public func unmarkText() {
+        open func unmarkText() {
             inputHandler?.inputMethodHandler?.unmarkText()
         }
 
-        public func selectedRange() -> NSRange {
+        open func selectedRange() -> NSRange {
             inputHandler?.inputMethodHandler?.currentSelectedRange()
                 ?? NSRange(location: NSNotFound, length: 0)
         }
 
-        public func markedRange() -> NSRange {
+        open func markedRange() -> NSRange {
             inputHandler?.inputMethodHandler?.markedRange()
                 ?? NSRange(location: NSNotFound, length: 0)
         }
 
-        public func hasMarkedText() -> Bool {
+        open func hasMarkedText() -> Bool {
             inputHandler?.inputMethodHandler?.hasMarkedText ?? false
         }
 
-        public func attributedSubstring(
+        open func attributedSubstring(
             forProposedRange range: NSRange,
-            actualRange: NSRangePointer?
+            actualRange: NSRangePointer?,
         ) -> NSAttributedString? {
             inputHandler?.inputMethodHandler?.attributedSubstring(
                 forProposedRange: range,
-                actualRange: actualRange
+                actualRange: actualRange,
             )
         }
 
-        public func validAttributesForMarkedText() -> [NSAttributedString.Key] {
+        open func validAttributesForMarkedText() -> [NSAttributedString.Key] {
             []
         }
 
-        public func firstRect(
+        open func firstRect(
             forCharacterRange _: NSRange,
-            actualRange _: NSRangePointer?
+            actualRange _: NSRangePointer?,
         ) -> NSRect {
             guard let surface else { return .zero }
 
+            // ghostty's ime point y is already the cell's bottom edge.
             let point = surface.imePoint()
             let viewRect = NSRect(
                 x: point.x,
-                y: bounds.height - point.y - point.height,
+                y: bounds.height - point.y,
                 width: point.width,
-                height: point.height
+                height: point.height,
             )
 
             guard let window else { return viewRect }
@@ -75,7 +76,7 @@
             return window.convertToScreen(windowRect)
         }
 
-        public func characterIndex(for _: NSPoint) -> Int {
+        open func characterIndex(for _: NSPoint) -> Int {
             NSNotFound
         }
     }

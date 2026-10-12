@@ -1,13 +1,22 @@
 {
-  "originHash" : "28e69cb8b7d11e27d78ba18452efd1cc52ea73d75ef31362fcaef5356fe29182",
+  "originHash" : "eaaaf38db53a606bb70dbe85a263ae10220e53ae4a447847f10bb5383fd5d229",
   "pins" : [
     {
-      "identity" : "msdisplaylink",
+      "identity" : "displaylink",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/Lakr233/MSDisplayLink.git",
+      "location" : "https://github.com/Lakr233/DisplayLink.git",
       "state" : {
-        "revision" : "1ba3e769b734e456317fa7e45321fa7f53eefb67",
-        "version" : "2.1.0"
+        "revision" : "41bea2661e04bebcb1c4f15fc0b6197850100fdd",
+        "version" : "3.0.1"
+      }
+    },
+    {
+      "identity" : "lookinside-release",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/LookInsideApp/LookInside-Release.git",
+      "state" : {
+        "revision" : "7514cfa8bd24a78f74d8b982c429e7d61ef58134",
+        "version" : "0.2.2"
       }
     }
   ],

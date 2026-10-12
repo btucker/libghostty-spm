@@ -11,7 +11,7 @@
 //  drift from upstream keyboard/IME semantics.
 //
 
-#if canImport(AppKit) && !canImport(UIKit)
+#if !canImport(UIKit) && canImport(AppKit)
     import AppKit
     import GhosttyKit
 
@@ -26,14 +26,8 @@
             inputMethodHandler = TerminalTextInputHandler(view: view)
         }
 
-        nonisolated static func shouldUseDirectInput(
-            modifierFlags: NSEvent.ModifierFlags
-        ) -> Bool {
-            modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty
-        }
-
         nonisolated static func shouldReplayInterpretedCommand(
-            _ selector: Selector
+            _ selector: Selector,
         ) -> Bool {
             // AppKit sometimes resolves non-text keys into editing commands
             // (for example Shift-Tab -> insertBacktab:). In a terminal, those
@@ -45,10 +39,6 @@
         func handleKeyDown(with event: NSEvent) {
             guard let view, let surface = view.surface else { return }
 
-            if handleDirectInputIfNeeded(event) {
-                return
-            }
-
             let action: ghostty_input_action_e = event.isARepeat
                 ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
             let translationEvent = translatedEvent(for: event, on: surface)
@@ -57,7 +47,7 @@
             interpretedCommandSelector = nil
             let markedTextBefore = inputMethodHandler?.hasMarkedText == true
             let keyboardIdBefore = markedTextBefore ? nil : KeyboardLayout.id
-            view.lastPerformKeyEvent = nil
+            view.keyEcho.lastPerformKeyEvent = nil
             view.interpretKeyEvents([translationEvent])
             if !markedTextBefore, keyboardIdBefore != KeyboardLayout.id {
                 _ = inputMethodHandler?.finishCollectingText()
@@ -68,7 +58,7 @@
             if let collected = inputMethodHandler?.finishCollectingText() {
                 var input = event.buildKeyInput(
                     action: action,
-                    translationModifiers: translationEvent.modifierFlags
+                    translationModifiers: translationEvent.modifierFlags,
                 )
                 for text in collected {
                     text.withCString { ptr in
@@ -88,7 +78,7 @@
                         action: action,
                         to: surface,
                         includeText: false,
-                        composing: inputMethodHandler?.hasMarkedText == true || markedTextBefore
+                        composing: inputMethodHandler?.hasMarkedText == true || markedTextBefore,
                     )
                     return
                 }
@@ -100,15 +90,12 @@
                 action: action,
                 to: surface,
                 includeText: true,
-                composing: inputMethodHandler?.hasMarkedText == true || markedTextBefore
+                composing: inputMethodHandler?.hasMarkedText == true || markedTextBefore,
             )
         }
 
         func handleKeyUp(with event: NSEvent) {
             guard let view, let surface = view.surface else { return }
-            if shouldBypassGhosttyForDirectInput(event) {
-                return
-            }
             var input = event.buildKeyInput(action: GHOSTTY_ACTION_RELEASE)
             input.text = nil
             surface.sendKeyEvent(input)
@@ -132,22 +119,21 @@
 
             var action = GHOSTTY_ACTION_RELEASE
             if mods.rawValue & mod != 0 {
-                let sidePressed: Bool
-                switch event.keyCode {
+                let sidePressed: Bool = switch event.keyCode {
                 case 0x3C:
-                    sidePressed = event.modifierFlags.rawValue
+                    event.modifierFlags.rawValue
                         & UInt(NX_DEVICERSHIFTKEYMASK) != 0
                 case 0x3E:
-                    sidePressed = event.modifierFlags.rawValue
+                    event.modifierFlags.rawValue
                         & UInt(NX_DEVICERCTLKEYMASK) != 0
                 case 0x3D:
-                    sidePressed = event.modifierFlags.rawValue
+                    event.modifierFlags.rawValue
                         & UInt(NX_DEVICERALTKEYMASK) != 0
                 case 0x36:
-                    sidePressed = event.modifierFlags.rawValue
+                    event.modifierFlags.rawValue
                         & UInt(NX_DEVICERCMDKEYMASK) != 0
                 default:
-                    sidePressed = true
+                    true
                 }
 
                 if sidePressed {
@@ -166,11 +152,11 @@
             action: ghostty_input_action_e,
             to surface: TerminalSurface,
             includeText: Bool,
-            composing: Bool = false
+            composing: Bool = false,
         ) {
             var input = event.buildKeyInput(
                 action: action,
-                translationModifiers: translationEvent.modifierFlags
+                translationModifiers: translationEvent.modifierFlags,
             )
             input.composing = composing
             guard includeText,
@@ -187,39 +173,9 @@
             }
         }
 
-        private func handleDirectInputIfNeeded(_ event: NSEvent) -> Bool {
-            guard let view else { return false }
-            // During IME composition, AppKit needs to keep ownership of editing
-            // commands so marked text can shrink, cancel, and move correctly.
-            guard inputMethodHandler?.hasMarkedText != true else { return false }
-            guard Self.shouldUseDirectInput(modifierFlags: event.modifierFlags) else {
-                return false
-            }
-            let delivery = TerminalHardwareKeyRouter.routeAppKit(
-                keyCode: event.keyCode,
-                backend: view.configuration.backend
-            )
-            guard case let .data(sequence) = delivery else { return false }
-            guard case let .inMemory(session) = view.configuration.backend else { return false }
-
-            session.sendInput(sequence)
-            return true
-        }
-
-        private func shouldBypassGhosttyForDirectInput(_ event: NSEvent) -> Bool {
-            guard let view else { return false }
-            guard Self.shouldUseDirectInput(modifierFlags: event.modifierFlags) else {
-                return false
-            }
-            return TerminalHardwareKeyRouter.routeAppKit(
-                keyCode: event.keyCode,
-                backend: view.configuration.backend
-            ).isDirectInput
-        }
-
         private func translatedEvent(
             for event: NSEvent,
-            on surface: TerminalSurface
+            on surface: TerminalSurface,
         ) -> NSEvent {
             guard let rawSurface = surface.rawValue else {
                 return event
@@ -228,8 +184,8 @@
             let translatedMods = eventModifierFlags(
                 from: ghostty_surface_key_translation_mods(
                     rawSurface,
-                    TerminalInputModifiers(from: event.modifierFlags).ghosttyMods
-                )
+                    TerminalInputModifiers(from: event.modifierFlags).ghosttyMods,
+                ),
             )
 
             var finalModifiers = event.modifierFlags
@@ -260,16 +216,24 @@
                 characters: event.characters(byApplyingModifiers: finalModifiers) ?? "",
                 charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
                 isARepeat: event.isARepeat,
-                keyCode: event.keyCode
+                keyCode: event.keyCode,
             ) ?? event
         }
 
         private func eventModifierFlags(from mods: ghostty_input_mods_e) -> NSEvent.ModifierFlags {
             var flags = NSEvent.ModifierFlags()
-            if mods.rawValue & GHOSTTY_MODS_SHIFT.rawValue != 0 { flags.insert(.shift) }
-            if mods.rawValue & GHOSTTY_MODS_CTRL.rawValue != 0 { flags.insert(.control) }
-            if mods.rawValue & GHOSTTY_MODS_ALT.rawValue != 0 { flags.insert(.option) }
-            if mods.rawValue & GHOSTTY_MODS_SUPER.rawValue != 0 { flags.insert(.command) }
+            if mods.rawValue & GHOSTTY_MODS_SHIFT.rawValue != 0 {
+                flags.insert(.shift)
+            }
+            if mods.rawValue & GHOSTTY_MODS_CTRL.rawValue != 0 {
+                flags.insert(.control)
+            }
+            if mods.rawValue & GHOSTTY_MODS_ALT.rawValue != 0 {
+                flags.insert(.option)
+            }
+            if mods.rawValue & GHOSTTY_MODS_SUPER.rawValue != 0 {
+                flags.insert(.command)
+            }
             return flags
         }
 
@@ -283,7 +247,7 @@
     extension NSEvent {
         func buildKeyInput(
             action: ghostty_input_action_e,
-            translationModifiers: NSEvent.ModifierFlags? = nil
+            translationModifiers: NSEvent.ModifierFlags? = nil,
         ) -> ghostty_input_key_s {
             var input = ghostty_input_key_s()
             input.action = action
@@ -331,7 +295,7 @@
                 var flags = modifierFlags
                 flags.remove(.control)
                 return TerminalInputText.filteredFunctionKeyText(
-                    self.characters(byApplyingModifiers: flags)
+                    characters(byApplyingModifiers: flags),
                 )
             }
 

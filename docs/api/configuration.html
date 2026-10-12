@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>GhosttyKit · API · Configuration</title>
+<link rel="stylesheet" href="../styles.css">
+<link rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/styles/github.min.css"
+      integrity="sha384-eFTL69TLRZTkNfYZOLM+G04821K1qZao/4QLJbet1pP4tcF+fdXq/9CdqAbWRl/L"
+      crossorigin="anonymous"
+      media="(prefers-color-scheme: light)">
+<link rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/styles/github-dark.min.css"
+      integrity="sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH"
+      crossorigin="anonymous"
+      media="(prefers-color-scheme: dark)">
+</head>
+<body>
+<nav class="topbar" aria-label="Primary">
+  <a class="home" href="../index.html">GhosttyKit</a>
+  <a href="../index.html">Overview</a>
+  <a href="../guide/index.html">Guide</a>
+  <a href="index.html" aria-current="page">API</a>
+  <a href="../architecture.html">Architecture</a>
+  <a href="../build.html">Build</a>
+</nav>
+
+<main>
+<h1>Configuration</h1>
+<nav class="on-this-page" aria-label="On this page">
+  <strong>On this page:</strong>
+  <a href="#TerminalSurfaceOptions">Surface Options</a>
+  <a href="#TerminalConfiguration">Terminal Configuration</a>
+  <a href="#TerminalTheme">Theme</a>
+  <a href="#Metrics">Metrics</a>
+</nav>
+
+<h2 id="TerminalSurfaceOptions">TerminalSurfaceOptions</h2>
+<pre><code class="language-swift">public struct TerminalSurfaceOptions: Sendable {
+    public var backend: TerminalSessionBackend
+    public var fontSize: Float?
+    public var workingDirectory: String?
+    /// Extra environment for the child process (exec backend).
+    public var envVars: [String: String]
+    /// Replaces the user's default shell as the child command (exec backend);
+    /// nil leaves the app-level config's command in place.
+    public var command: String?
+    /// Keep the surface open after `command` exits; nil leaves the
+    /// app-level config's value in place.
+    public var waitAfterCommand: Bool?
+    public var context: TerminalSurfaceContext
+    /// Coalescing window for host-driven resizes; 0 (the default) resizes
+    /// synchronously on every metrics change.
+    public var resizeThrottleMilliseconds: Double
+
+    public init(
+        backend: TerminalSessionBackend = .exec,
+        fontSize: Float? = nil,
+        workingDirectory: String? = nil,
+        envVars: [String: String] = [:],
+        command: String? = nil,
+        waitAfterCommand: Bool? = nil,
+        context: TerminalSurfaceContext = .window,
+        resizeThrottleMilliseconds: Double = 0
+    )
+}
+
+public enum TerminalSessionBackend: Sendable {
+    case exec
+    case inMemory(InMemoryTerminalSession)
+}
+
+public enum TerminalSurfaceContext: Sendable, Equatable {
+    case window
+    case split
+}
+</code></pre>
+
+<h2 id="TerminalConfiguration">TerminalConfiguration</h2>
+<pre><code class="language-swift">public struct TerminalConfiguration: Sendable, Hashable {
+    public init()
+    public init(configure: (inout Builder) -&gt; Void)
+    public init(
+        startingFrom base: TerminalConfiguration,
+        configure: (inout Builder) -&gt; Void
+    )
+
+    public func appending(_ command: TerminalConfigCommand) -&gt; TerminalConfiguration
+
+    // Font
+    public func fontFamily(_ value: String) -&gt; TerminalConfiguration
+    public func fontSize(_ value: Float) -&gt; TerminalConfiguration
+    public func fontThicken(_ enabled: Bool) -&gt; TerminalConfiguration
+    public func fontThickenStrength(_ value: Int) -&gt; TerminalConfiguration
+
+    // Cursor
+    public func cursorStyle(_ style: TerminalCursorStyle) -&gt; TerminalConfiguration
+    public func cursorStyleBlink(_ enabled: Bool) -&gt; TerminalConfiguration
+    public func cursorColor(_ value: String) -&gt; TerminalConfiguration
+    public func cursorText(_ value: String) -&gt; TerminalConfiguration
+    public func cursorOpacity(_ value: Double) -&gt; TerminalConfiguration
+
+    // Colors
+    public func background(_ value: String) -&gt; TerminalConfiguration
+    public func foreground(_ value: String) -&gt; TerminalConfiguration
+    public func selectionBackground(_ value: String) -&gt; TerminalConfiguration
+    public func selectionForeground(_ value: String) -&gt; TerminalConfiguration
+    public func boldColor(_ value: String) -&gt; TerminalConfiguration
+    public func palette(_ index: Int, color: String) -&gt; TerminalConfiguration
+    public func minimumContrast(_ value: Double) -&gt; TerminalConfiguration
+
+    // Background
+    public func backgroundOpacity(_ value: Double) -&gt; TerminalConfiguration
+    public func backgroundBlur(_ value: Int) -&gt; TerminalConfiguration
+
+    // Layout
+    public func windowPaddingX(_ value: Int) -&gt; TerminalConfiguration
+    public func windowPaddingY(_ value: Int) -&gt; TerminalConfiguration
+
+    // Escape hatch
+    public func custom(_ key: String, _ value: String) -&gt; TerminalConfiguration
+
+    public static let `default`: TerminalConfiguration
+    public var rendered: String { get }
+}
+
+public enum TerminalCursorStyle: String, Sendable, Hashable {
+    case block
+    case bar
+    case underline
+}
+
+public enum TerminalConfigCommand: Sendable, Hashable {
+    case fontFamily(String)
+    case fontSize(Float)
+    case fontThicken(Bool)
+    case fontThickenStrength(Int)
+    case cursorStyle(TerminalCursorStyle)
+    case cursorStyleBlink(Bool)
+    case cursorColor(String)
+    case cursorText(String)
+    case cursorOpacity(Double)
+    case background(String)
+    case foreground(String)
+    case selectionBackground(String)
+    case selectionForeground(String)
+    case boldColor(String)
+    case palette(index: Int, color: String)
+    case minimumContrast(Double)
+    case backgroundOpacity(Double)
+    case backgroundBlur(Int)
+    case windowPaddingX(Int)
+    case windowPaddingY(Int)
+    case custom(key: String, value: String)
+}
+</code></pre>
+
+<p>Each fluent method appends the <code>TerminalConfigCommand</code> case of the same name; <code>rendered</code> emits one <code>key = value</code> line per command. The builder variant has matching <code>with*</code> mutating methods (<code>withFontFamily</code>, <code>withCursorColor</code>, …) for composing a default configuration with many overrides.</p>
+
+<h2 id="TerminalTheme">TerminalTheme</h2>
+<pre><code class="language-swift">public enum TerminalColorScheme: Sendable {
+    case light
+    case dark
+}
+
+public struct TerminalTheme: Sendable, Hashable {
+    public var light: TerminalConfiguration
+    public var dark: TerminalConfiguration
+
+    public init(
+        light: TerminalConfiguration,
+        dark: TerminalConfiguration
+    )
+}
+</code></pre>
+<p><code>TerminalController</code> selects the light or dark configuration when the active color scheme changes.</p>
+
+<h2 id="Metrics">Metrics</h2>
+<pre><code class="language-swift">public struct TerminalGridMetrics: Sendable, Equatable {
+    public var columns: UInt16
+    public var rows: UInt16
+    public var widthPixels: UInt32
+    public var heightPixels: UInt32
+    public var cellWidthPixels: UInt32
+    public var cellHeightPixels: UInt32
+}
+
+public struct InMemoryTerminalViewport: Sendable, Equatable {
+    public var columns: UInt16
+    public var rows: UInt16
+    public var widthPixels: UInt32
+    public var heightPixels: UInt32
+    public var cellWidthPixels: UInt32
+    public var cellHeightPixels: UInt32
+}
+
+public struct TerminalInputModifiers: OptionSet, Sendable {
+    public static let shift: TerminalInputModifiers
+    public static let ctrl: TerminalInputModifiers
+    public static let alt: TerminalInputModifiers
+    public static let super_: TerminalInputModifiers
+}
+</code></pre>
+
+<nav class="pager" aria-label="Sibling pages">
+  <a class="prev" href="terminal.html">Terminal Surface</a>
+  <a class="parent" href="index.html">↑ API</a>
+  <a class="next" href="themes.html">Theme Catalog</a>
+</nav>
+
+<footer>
+GhosttyKit · <a href="https://github.com/Lakr233/libghostty-spm">github.com/Lakr233/libghostty-spm</a>
+</footer>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/highlight.min.js"
+        integrity="sha384-GdEWAbCjn+ghjX0gLx7/N1hyTVmPAjdC2OvoAA0RyNcAOhqwtT8qnbCxWle2+uJX"
+        crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.10.0/languages/swift.min.js"
+        integrity="sha384-TfALNLT6HJzZieazgsVvFM0DzFWQsgl0d7mdwPLyg1yg7XE4QwLY4jqmJRNnI1S4"
+        crossorigin="anonymous"></script>
+<script>hljs.highlightAll();</script>
+</body>
+</html>

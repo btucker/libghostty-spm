@@ -5,25 +5,47 @@
 //  Created by Lakr233 on 2026/3/17.
 //
 
+import Combine
 import SwiftUI
 
-@available(macOS 14.0, iOS 17.0, macCatalyst 17.0, *)
 public extension TerminalViewState {
     func adopt(colorScheme: ColorScheme) {
-        let nextColorScheme = TerminalColorScheme(colorScheme)
-        guard nextColorScheme != controller.effectiveColorScheme else { return }
-        controller.setColorScheme(nextColorScheme)
+        adopt(terminalColorScheme: TerminalColorScheme(colorScheme))
+    }
+
+    func adopt(terminalColorScheme colorScheme: TerminalColorScheme) {
+        guard colorScheme != controller.effectiveColorScheme else { return }
+        controller.setColorScheme(colorScheme) {
+            self.objectWillChange.send()
+        }
+        publishBackgroundColor()
     }
 
     @discardableResult
     func setTheme(_ theme: TerminalTheme) -> Bool {
-        controller.setTheme(theme)
+        let changed = controller.setTheme(theme) {
+            self.objectWillChange.send()
+        }
+        publishBackgroundColor()
+        return changed
     }
 
     @discardableResult
     func setTerminalConfiguration(
-        _ terminalConfiguration: TerminalConfiguration
+        _ terminalConfiguration: TerminalConfiguration,
     ) -> Bool {
-        controller.setTerminalConfiguration(terminalConfiguration)
+        let changed = controller.setTerminalConfiguration(terminalConfiguration) {
+            self.objectWillChange.send()
+        }
+        publishBackgroundColor()
+        return changed
+    }
+}
+
+extension TerminalViewState {
+    func publishBackgroundColor() {
+        let color = programBackgroundColor ?? controller.backgroundColor
+        guard backgroundColor != color else { return }
+        backgroundColor = color
     }
 }

@@ -7,53 +7,104 @@
     import GhosttyKit
     import UIKit
 
+    /// UITextInput delegate wiring; behavior lives in +UITextInput.
+    struct TextInputBridgeState {
+        weak var inputDelegate: (any UITextInputDelegate)?
+    }
+
     extension UITerminalView: UITextInput, UITextInputTraits {
         // MARK: - UITextInputTraits
 
-        public var autocorrectionType: UITextAutocorrectionType {
+        open var autocorrectionType: UITextAutocorrectionType {
             get { .no }
             set {}
         }
 
-        public var autocapitalizationType: UITextAutocapitalizationType {
+        open var autocapitalizationType: UITextAutocapitalizationType {
             get { .none }
             set {}
         }
 
-        public var smartQuotesType: UITextSmartQuotesType {
+        open var smartQuotesType: UITextSmartQuotesType {
             get { .no }
             set {}
         }
 
-        public var smartDashesType: UITextSmartDashesType {
+        open var smartDashesType: UITextSmartDashesType {
             get { .no }
             set {}
         }
 
-        public var smartInsertDeleteType: UITextSmartInsertDeleteType {
+        open var smartInsertDeleteType: UITextSmartInsertDeleteType {
             get { .no }
             set {}
         }
 
-        public var spellCheckingType: UITextSpellCheckingType {
+        open var spellCheckingType: UITextSpellCheckingType {
             get { .no }
             set {}
         }
 
-        public var keyboardType: UIKeyboardType {
+        /// Off for the same reason as autocorrection, and doubly so: the
+        /// system delivers inline predictions as marked text, which a
+        /// terminal renders as highlighted preedit at the caret — plain
+        /// typing then looks perpetually selected.
+        @available(iOS 17.0, *)
+        open var inlinePredictionType: UITextInlinePredictionType {
+            get { .no }
+            set {}
+        }
+
+        open var keyboardType: UIKeyboardType {
             get { .default }
             set {}
         }
 
         // MARK: - UIKeyInput
 
-        public func insertText(_ text: String) {
-            guard !hardwareKeyHandled else {
+        open func insertText(_ text: String) {
+            #if targetEnvironment(macCatalyst)
+                // The text input system may hand over a key's text with no
+                // press reported for it — on macOS 26 a letter or Delete
+                // arrives here that way, as Ctrl combos do everywhere (see
+                // `keyCommands`). A key went down all the same, and it ends
+                // the repeat of one still held, as a press would.
+                stopKeyRepeat()
+            #else
+                claimPendingInputMethodKeys()
+            #endif
+            // A lone, unmarked "\n"/"\r" is the software keyboard's Return —
+            // it must travel the key path (bracketed paste turns a text-path
+            // newline into a literal insertion instead of accepting the
+            // line). Longer strings containing newlines (dictation, actual
+            // pastes) stay on the text path, where paste semantics are
+            // correct.
+            let route = TerminalSoftwareKeyCommitRouter.route(
+                text: text,
+                hasMarkedText: inputHandler.hasMarkedText,
+                hardwareKeyHandled: hardwareKeyboard.keyHandled,
+            )
+
+            if route == .suppressHardwareDuplicate {
                 TerminalDebugLog.log(
                     .input,
-                    "insertText suppressed text=\(TerminalDebugLog.describe(text))"
+                    "insertText suppressed text=\(TerminalDebugLog.describe(text))",
                 )
-                hardwareKeyHandled = false
+                hardwareKeyboard.keyHandled = false
+                return
+            }
+
+            if route == .semanticEnter {
+                #if !targetEnvironment(macCatalyst)
+                    let mods = stickyModifiers.consumeForNextKey()
+                    TerminalDebugLog.log(
+                        .input,
+                        "insertText semantic enter mods=0x\(String(mods.ghosttyMods.rawValue, radix: 16))",
+                    )
+                    sendSyntheticKey(usage: 0x28, additionalMods: mods)
+                #else
+                    sendReturnKey()
+                #endif
                 return
             }
 
@@ -72,16 +123,52 @@
             inputHandler.insertText(text)
         }
 
-        public func deleteBackward() {
+        #if targetEnvironment(macCatalyst)
+            /// Deliver Return exactly as a hardware keyboard would: one Enter key
+            /// event through the core's key encoder, so terminal modes (kitty
+            /// keyboard protocol included) keep deciding the bytes. iOS routes
+            /// semantic Enter through sendSyntheticKey (sticky modifiers apply);
+            /// Catalyst has no accessory bar, so this direct path remains.
+            private func sendReturnKey() {
+                let usage = UInt16(UIKeyboardHIDUsage.keyboardReturnOrEnter.rawValue)
+
+                var keyEvent = ghostty_input_key_s()
+                keyEvent.action = GHOSTTY_ACTION_PRESS
+                keyEvent.mods = ghostty_input_mods_e(rawValue: 0)
+                keyEvent.keycode = TerminalHardwareKeyRouter.appKitKeyCodeForUIKit(
+                    usage: usage,
+                )
+                keyEvent.composing = false
+
+                let carriageReturn = "\r"
+                carriageReturn.withCString { ptr in
+                    keyEvent.text = ptr
+                    sendInputKeyEvent(keyEvent)
+                }
+                // The matching release, so a kitty-protocol program with event
+                // reporting never sees Return held down.
+                keyEvent.action = GHOSTTY_ACTION_RELEASE
+                keyEvent.text = nil
+                sendInputKeyEvent(keyEvent)
+            }
+        #endif
+
+        open func deleteBackward() {
+            #if targetEnvironment(macCatalyst)
+                // A key went down, pressed or not; see `insertText`.
+                stopKeyRepeat()
+            #else
+                claimPendingInputMethodKeys()
+            #endif
             if inputHandler.deleteBackwardInMarkedText() {
                 TerminalDebugLog.log(.input, "deleteBackward handled by marked text")
-                hardwareKeyHandled = false
+                hardwareKeyboard.keyHandled = false
                 return
             }
 
-            guard !hardwareKeyHandled else {
+            guard !hardwareKeyboard.keyHandled else {
                 TerminalDebugLog.log(.input, "deleteBackward suppressed")
-                hardwareKeyHandled = false
+                hardwareKeyboard.keyHandled = false
                 return
             }
 
@@ -95,74 +182,72 @@
                 }
             #endif
 
-            let delivery = TerminalHardwareKeyRouter.routeUIKit(
-                usage: usage,
-                backend: configuration.backend
-            )
-            if case let .data(sequence) = delivery,
-               case let .inMemory(session) = configuration.backend
-            {
-                session.sendInput(sequence)
-                return
-            }
-
             var keyEvent = ghostty_input_key_s()
             keyEvent.action = GHOSTTY_ACTION_PRESS
             keyEvent.mods = ghostty_input_mods_e(rawValue: 0)
             keyEvent.keycode = TerminalHardwareKeyRouter.appKitKeyCodeForUIKit(
-                usage: usage
+                usage: usage,
             )
             keyEvent.composing = false
 
             let delete = "\u{7F}"
             delete.withCString { ptr in
                 keyEvent.text = ptr
-                surface?.sendKeyEvent(keyEvent)
+                sendInputKeyEvent(keyEvent)
             }
+            keyEvent.action = GHOSTTY_ACTION_RELEASE
+            keyEvent.text = nil
+            sendInputKeyEvent(keyEvent)
         }
 
         // MARK: - UITextInput Marked Text
 
-        public func setMarkedText(
+        open func setMarkedText(
             _ markedText: String?,
-            selectedRange: NSRange
+            selectedRange: NSRange,
         ) {
+            #if !targetEnvironment(macCatalyst)
+                claimPendingInputMethodKeys()
+            #endif
             inputHandler.setMarkedText(markedText, selectedRange: selectedRange)
         }
 
-        public func unmarkText() {
+        open func unmarkText() {
+            #if !targetEnvironment(macCatalyst)
+                claimPendingInputMethodKeys()
+            #endif
             inputHandler.unmarkText(applyingStickyModifiers: false)
         }
 
-        public var markedTextRange: UITextRange? {
+        open var markedTextRange: UITextRange? {
             inputHandler.markedTextRange()
         }
 
-        public var markedTextStyle: [NSAttributedString.Key: Any]? {
+        open var markedTextStyle: [NSAttributedString.Key: Any]? {
             get { nil }
             set {}
         }
 
         // MARK: - UITextInput Selection
 
-        public var selectedTextRange: UITextRange? {
+        open var selectedTextRange: UITextRange? {
             get { inputHandler.selectedTextRange() }
             set { inputHandler.setSelectedTextRange(newValue) }
         }
 
         // MARK: - UITextInput Positions
 
-        public var beginningOfDocument: UITextPosition {
+        open var beginningOfDocument: UITextPosition {
             TerminalTextPosition(0)
         }
 
-        public var endOfDocument: UITextPosition {
-            TerminalTextPosition(inputHandler.documentLength)
+        open var endOfDocument: UITextPosition {
+            TerminalTextPosition(inputHandler.document.length)
         }
 
-        public func textRange(
+        open func textRange(
             from fromPosition: UITextPosition,
-            to toPosition: UITextPosition
+            to toPosition: UITextPosition,
         ) -> UITextRange? {
             guard
                 let from = fromPosition as? TerminalTextPosition,
@@ -171,41 +256,45 @@
             return TerminalTextRange(start: from, end: to)
         }
 
-        public func position(
+        open func position(
             from position: UITextPosition,
-            offset: Int
+            offset: Int,
         ) -> UITextPosition? {
             guard let pos = position as? TerminalTextPosition else { return nil }
             let newIndex = pos.index + offset
-            guard newIndex >= 0, newIndex <= inputHandler.documentLength else { return nil }
+            guard newIndex >= 0, newIndex <= inputHandler.document.length else { return nil }
             return TerminalTextPosition(newIndex)
         }
 
-        public func position(
+        open func position(
             from position: UITextPosition,
             in _: UITextLayoutDirection,
-            offset: Int
+            offset: Int,
         ) -> UITextPosition? {
             self.position(from: position, offset: offset)
         }
 
-        public func compare(
+        open func compare(
             _ position: UITextPosition,
-            to other: UITextPosition
+            to other: UITextPosition,
         ) -> ComparisonResult {
             guard
                 let lhs = position as? TerminalTextPosition,
                 let rhs = other as? TerminalTextPosition
             else { return .orderedSame }
 
-            if lhs.index < rhs.index { return .orderedAscending }
-            if lhs.index > rhs.index { return .orderedDescending }
+            if lhs.index < rhs.index {
+                return .orderedAscending
+            }
+            if lhs.index > rhs.index {
+                return .orderedDescending
+            }
             return .orderedSame
         }
 
-        public func offset(
+        open func offset(
             from: UITextPosition,
-            to toPosition: UITextPosition
+            to toPosition: UITextPosition,
         ) -> Int {
             guard
                 let f = from as? TerminalTextPosition,
@@ -216,12 +305,15 @@
 
         // MARK: - UITextInput Text
 
-        public func text(in range: UITextRange) -> String? {
+        open func text(in range: UITextRange) -> String? {
             guard let range = range as? TerminalTextRange else { return nil }
             return inputHandler.text(in: range)
         }
 
-        public func replace(_: UITextRange, withText text: String) {
+        open func replace(_: UITextRange, withText text: String) {
+            #if !targetEnvironment(macCatalyst)
+                claimPendingInputMethodKeys()
+            #endif
             #if !targetEnvironment(macCatalyst)
                 if inputHandler.hasMarkedText {
                     inputHandler.insertText(text)
@@ -239,59 +331,59 @@
 
         // MARK: - UITextInput Delegate
 
-        public var inputDelegate: (any UITextInputDelegate)? {
-            get { _inputDelegate }
-            set { _inputDelegate = newValue }
+        open var inputDelegate: (any UITextInputDelegate)? {
+            get { textInputBridge.inputDelegate }
+            set { textInputBridge.inputDelegate = newValue }
         }
 
         // MARK: - UITextInput Tokenizer
 
-        public var tokenizer: any UITextInputTokenizer {
+        open var tokenizer: any UITextInputTokenizer {
             UITextInputStringTokenizer(textInput: self)
         }
 
-        public var textInputView: UIView {
+        open var textInputView: UIView {
             self
         }
 
         // MARK: - UITextInput Geometry
 
-        public func firstRect(for range: UITextRange) -> CGRect {
+        open func firstRect(for range: UITextRange) -> CGRect {
             if let range = range as? TerminalTextRange {
                 return rectForRange(range)
             }
             return markedTextRect()
         }
 
-        public func caretRect(for position: UITextPosition) -> CGRect {
+        open func caretRect(for position: UITextPosition) -> CGRect {
             caretRectForPosition(position)
         }
 
-        public func selectionRects(
-            for _: UITextRange
+        open func selectionRects(
+            for _: UITextRange,
         ) -> [UITextSelectionRect] {
             []
         }
 
-        public func closestPosition(to point: CGPoint) -> UITextPosition? {
+        open func closestPosition(to point: CGPoint) -> UITextPosition? {
             TerminalTextPosition(textIndex(for: point))
         }
 
-        public func closestPosition(
+        open func closestPosition(
             to point: CGPoint,
-            within _: UITextRange
+            within _: UITextRange,
         ) -> UITextPosition? {
             closestPosition(to: point)
         }
 
-        public func characterRange(at point: CGPoint) -> UITextRange? {
+        open func characterRange(at point: CGPoint) -> UITextRange? {
             let index = textIndex(for: point)
             return TerminalTextRange(location: index, length: 0)
         }
 
-        public func position(
+        open func position(
             within range: UITextRange,
-            farthestIn direction: UITextLayoutDirection
+            farthestIn direction: UITextLayoutDirection,
         ) -> UITextPosition? {
             switch direction {
             case .left, .up: return range.start
@@ -300,30 +392,31 @@
             }
         }
 
-        public func characterRange(
+        open func characterRange(
             byExtending position: UITextPosition,
-            in _: UITextLayoutDirection
+            in _: UITextLayoutDirection,
         ) -> UITextRange? {
-            guard inputHandler.documentLength > 0,
+            let documentLength = inputHandler.document.length
+            guard documentLength > 0,
                   let position = position as? TerminalTextPosition
             else {
                 return TerminalTextRange(location: 0, length: 0)
             }
 
-            let location = min(max(position.index, 0), inputHandler.documentLength - 1)
+            let location = min(max(position.index, 0), documentLength - 1)
             return TerminalTextRange(location: location, length: 1)
         }
 
-        public func baseWritingDirection(
+        open func baseWritingDirection(
             for _: UITextPosition,
-            in _: UITextStorageDirection
+            in _: UITextStorageDirection,
         ) -> NSWritingDirection {
             .leftToRight
         }
 
-        public func setBaseWritingDirection(
+        open func setBaseWritingDirection(
             _: NSWritingDirection,
-            for _: UITextRange
+            for _: UITextRange,
         ) {}
 
         private func imeRect() -> CGRect {
@@ -333,14 +426,14 @@
                 x: point.x,
                 y: point.y,
                 width: point.width,
-                height: point.height
+                height: point.height,
             )
         }
 
         private func markedTextRect() -> CGRect {
             let baseRect = imeRect()
             guard
-                inputHandler.documentLength > 0,
+                inputHandler.hasMarkedText,
                 let range = markedTextRange as? TerminalTextRange
             else {
                 return baseRect
@@ -356,16 +449,16 @@
         private func caretRectForPosition(_ position: UITextPosition) -> CGRect {
             let baseRect = imeRect()
             let cellWidth = compositionCellWidth(in: baseRect)
-            guard inputHandler.documentLength > 0 else {
+            guard inputHandler.hasMarkedText else {
                 let rect = CGRect(
                     x: baseRect.minX,
                     y: baseRect.minY,
                     width: cellWidth,
-                    height: baseRect.height
+                    height: baseRect.height,
                 )
                 TerminalDebugLog.log(
                     .ime,
-                    "caretRect empty position base=\(NSCoder.string(for: baseRect)) rect=\(NSCoder.string(for: rect))"
+                    "caretRect empty position base=\(NSCoder.string(for: baseRect)) rect=\(NSCoder.string(for: rect))",
                 )
                 return rect
             }
@@ -375,26 +468,26 @@
                     x: baseRect.maxX,
                     y: baseRect.minY,
                     width: cellWidth,
-                    height: baseRect.height
+                    height: baseRect.height,
                 )
                 TerminalDebugLog.log(
                     .ime,
-                    "caretRect fallback base=\(NSCoder.string(for: baseRect)) rect=\(NSCoder.string(for: rect))"
+                    "caretRect fallback base=\(NSCoder.string(for: baseRect)) rect=\(NSCoder.string(for: rect))",
                 )
                 return rect
             }
 
-            let clampedIndex = min(max(position.index, 0), inputHandler.documentLength)
+            let clampedIndex = inputHandler.document.markedOffset(of: position.index)
             let x = baseRect.minX + CGFloat(clampedIndex) * cellWidth
             let rect = CGRect(
                 x: x,
                 y: baseRect.minY,
                 width: cellWidth,
-                height: baseRect.height
+                height: baseRect.height,
             )
             TerminalDebugLog.log(
                 .ime,
-                "caretRect index=\(clampedIndex) base=\(NSCoder.string(for: baseRect)) cellWidth=\(String(format: "%.2f", cellWidth)) rect=\(NSCoder.string(for: rect))"
+                "caretRect index=\(clampedIndex) base=\(NSCoder.string(for: baseRect)) cellWidth=\(String(format: "%.2f", cellWidth)) rect=\(NSCoder.string(for: rect))",
             )
             return rect
         }
@@ -402,19 +495,19 @@
         private func rect(
             for range: TerminalTextRange,
             in baseRect: CGRect,
-            fallbackWidth: CGFloat
+            fallbackWidth: CGFloat,
         ) -> CGRect {
-            let documentLength = max(inputHandler.documentLength, 1)
             let cellWidth = compositionCellWidth(in: baseRect)
-            let location = min(max(range.location, 0), documentLength)
-            let length = max(range.length, 0)
-            let x = baseRect.minX + CGFloat(location) * cellWidth
-            let width = max(CGFloat(length) * cellWidth, fallbackWidth)
+            let markedRange = inputHandler.document.markedRange(
+                of: NSRange(location: range.location, length: range.length),
+            )
+            let x = baseRect.minX + CGFloat(markedRange.location) * cellWidth
+            let width = max(CGFloat(markedRange.length) * cellWidth, fallbackWidth)
             return CGRect(
                 x: x,
                 y: baseRect.minY,
                 width: width,
-                height: baseRect.height
+                height: baseRect.height,
             )
         }
 
@@ -431,17 +524,18 @@
 
         private func textIndex(for point: CGPoint) -> Int {
             let baseRect = imeRect()
-            guard inputHandler.documentLength > 0 else { return 0 }
+            let document = inputHandler.document
+            guard document.markedLength > 0 else { return document.position(ofMarkedOffset: 0) }
 
             let cellWidth = compositionCellWidth(in: baseRect)
-            guard cellWidth > 0 else { return 0 }
+            guard cellWidth > 0 else { return document.position(ofMarkedOffset: 0) }
 
             let relativeX = point.x - baseRect.minX
             let rawIndex = Int((relativeX / cellWidth).rounded(.down))
-            let index = min(max(rawIndex, 0), inputHandler.documentLength)
+            let index = document.position(ofMarkedOffset: rawIndex)
             TerminalDebugLog.log(
                 .ime,
-                "textIndex point=\(NSCoder.string(for: point)) base=\(NSCoder.string(for: baseRect)) cellWidth=\(String(format: "%.2f", cellWidth)) index=\(index)"
+                "textIndex point=\(NSCoder.string(for: point)) base=\(NSCoder.string(for: baseRect)) cellWidth=\(String(format: "%.2f", cellWidth)) index=\(index)",
             )
             return index
         }

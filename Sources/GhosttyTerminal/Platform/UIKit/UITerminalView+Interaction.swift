@@ -10,295 +10,256 @@
     import UIKit
 
     extension UITerminalView {
-        override public func touchesBegan(
+        /// How far a finger may wander and still count as a tap.
+        static let tapCandidateSlop: CGFloat = 10
+        /// How long a press may last and still count as a tap, so a
+        /// stationary hold never toggles the keyboard with inline selection
+        /// off, where the long-press recognizer refuses to begin.
+        static let tapCandidateMaxDuration: TimeInterval = 0.35
+
+        override open func touchesBegan(
             _ touches: Set<UITouch>,
-            with event: UIEvent?
+            with event: UIEvent?,
         ) {
-            #if targetEnvironment(macCatalyst)
-                if handleIndirectPointerTouches(touches, phase: .began, event: event) {
-                    return
-                }
-            #endif
+            if handleIndirectPointerTouches(touches, phase: .began, event: event) {
+                return
+            }
+            touchSelection.lastInputWasDirect = true
+            if let overlay = touchSelection.overlay,
+               touches.contains(where: { $0.view?.isDescendant(of: overlay) == true })
+            {
+                return
+            }
             super.touchesBegan(touches, with: event)
+            if usesInlineTextSelection {
+                return
+            }
             #if targetEnvironment(macCatalyst)
                 becomeFirstResponder()
             #else
-                pendingKeyboardDismissOnTouchEnd = false
-                touchDidScrollDuringCurrentTouch = false
-                if softwareKeyboardVisible {
-                    pendingKeyboardDismissOnTouchEnd = true
+                if momentumScroll.displayLink != nil {
+                    // A touch during momentum is a scroll-stop, not a tap.
+                    stopMomentumScrolling()
+                    softwareKeyboard.tapCandidateArmed = false
+                } else if let touch = touches.first,
+                          // View-scoped on purpose: `allTouches` spans the
+                          // whole app, and a finger resting on host chrome
+                          // (sidebar, tab bar) must not swallow a tap here.
+                          (event?.touches(for: self)?.count ?? touches.count) == 1
+                {
+                    softwareKeyboard.tapCandidateArmed = true
+                    softwareKeyboard.tapCandidateStart = touch.location(in: self)
+                    softwareKeyboard.tapCandidateTimestamp = touch.timestamp
                 } else {
-                    becomeFirstResponder()
+                    // A second finger means pinch (or some other
+                    // multi-touch gesture) — the sequence can no longer
+                    // be a tap.
+                    softwareKeyboard.tapCandidateArmed = false
                 }
             #endif
         }
 
-        override public func touchesMoved(
+        override open func touchesMoved(
             _ touches: Set<UITouch>,
-            with event: UIEvent?
+            with event: UIEvent?,
         ) {
-            #if targetEnvironment(macCatalyst)
-                if handleIndirectPointerTouches(touches, phase: .moved, event: event) {
-                    return
+            if handleIndirectPointerTouches(touches, phase: .moved, event: event) {
+                return
+            }
+            #if !targetEnvironment(macCatalyst)
+                if softwareKeyboard.tapCandidateArmed, let touch = touches.first {
+                    let point = touch.location(in: self)
+                    let start = softwareKeyboard.tapCandidateStart
+                    if hypot(point.x - start.x, point.y - start.y) > Self.tapCandidateSlop {
+                        softwareKeyboard.tapCandidateArmed = false
+                    }
                 }
             #endif
             super.touchesMoved(touches, with: event)
         }
 
-        override public func touchesEnded(
+        override open func touchesEnded(
             _ touches: Set<UITouch>,
-            with event: UIEvent?
+            with event: UIEvent?,
         ) {
-            #if targetEnvironment(macCatalyst)
-                if handleIndirectPointerTouches(touches, phase: .ended, event: event) {
-                    return
-                }
-            #endif
+            if handleIndirectPointerTouches(touches, phase: .ended, event: event) {
+                return
+            }
+            if usesInlineTextSelection {
+                super.touchesEnded(touches, with: event)
+                return
+            }
             #if !targetEnvironment(macCatalyst)
-                if pendingKeyboardDismissOnTouchEnd, !touchDidScrollDuringCurrentTouch {
-                    resignFirstResponder()
+                if softwareKeyboard.tapCandidateArmed, let touch = touches.first {
+                    softwareKeyboard.tapCandidateArmed = false
+                    let duration = touch.timestamp - softwareKeyboard.tapCandidateTimestamp
+                    if duration <= Self.tapCandidateMaxDuration {
+                        TerminalDebugLog.log(
+                            .input,
+                            "tap toggles keyboard visible=\(softwareKeyboard.isVisible) duration=\(String(format: "%.3f", duration))",
+                        )
+                        // The tap is a click first and a keyboard toggle
+                        // second, in both directions: a TUI tracking the
+                        // mouse gets its press before the resize the
+                        // keyboard causes, and the shell sees the
+                        // click-to-move at its prompt either way.
+                        sendTapClick(at: touch.location(in: self))
+                        // Overridable: a host keyboard lock overrides
+                        // `toggleSoftwareKeyboard()` to swallow the toggle;
+                        // the click above still lands either way.
+                        toggleSoftwareKeyboard()
+                    }
                 }
-                pendingKeyboardDismissOnTouchEnd = false
-                touchDidScrollDuringCurrentTouch = false
             #endif
             super.touchesEnded(touches, with: event)
         }
 
-        override public func touchesCancelled(
+        override open func touchesCancelled(
             _ touches: Set<UITouch>,
-            with event: UIEvent?
+            with event: UIEvent?,
         ) {
-            #if targetEnvironment(macCatalyst)
-                if handleIndirectPointerTouches(touches, phase: .cancelled, event: event) {
-                    return
-                }
-            #endif
+            if handleIndirectPointerTouches(touches, phase: .cancelled, event: event) {
+                return
+            }
             #if !targetEnvironment(macCatalyst)
-                pendingKeyboardDismissOnTouchEnd = false
-                touchDidScrollDuringCurrentTouch = false
+                softwareKeyboard.tapCandidateArmed = false
             #endif
             super.touchesCancelled(touches, with: event)
         }
 
         func setupPlatformInput() {
-            #if targetEnvironment(macCatalyst)
-                setupCatalystScrollWheelInput()
-            #else
+            addInteraction(selectionContextMenuInteraction)
+            setupDropInput()
+            addGestureRecognizer(TerminalScrollWheelGestureRecognizer(
+                target: self,
+                action: #selector(handleScrollWheelGesture(_:)),
+            ))
+            let pointerInteraction = UIPointerInteraction(delegate: self)
+            addInteraction(pointerInteraction)
+            pointer.pointerInteraction = pointerInteraction
+            let hover = UIHoverGestureRecognizer(
+                target: self,
+                action: #selector(handlePointerHover(_:)),
+            )
+            hover.cancelsTouchesInView = false
+            hover.delegate = self
+            addGestureRecognizer(hover)
+            pointer.hoverRecognizer = hover
+            #if !targetEnvironment(macCatalyst)
                 setupTouchScrollInput()
             #endif
         }
 
-        #if targetEnvironment(macCatalyst)
-            func setupCatalystScrollWheelInput() {
-                let gesture = UIPanGestureRecognizer(
-                    target: self,
-                    action: #selector(handleCatalystScrollWheelGesture(_:))
-                )
-                gesture.allowedScrollTypesMask = [.continuous, .discrete]
-                gesture.cancelsTouchesInView = false
-                gesture.delaysTouchesBegan = false
-                gesture.delaysTouchesEnded = false
-                addGestureRecognizer(gesture)
-            }
-
-            @objc func handleCatalystScrollWheelGesture(
-                _ gesture: UIPanGestureRecognizer
-            ) {
-                guard activePointerButton == nil else { return }
-
-                let translation = gesture.translation(in: self)
-                gesture.setTranslation(.zero, in: self)
-                TerminalDebugLog.log(
-                    .input,
-                    "catalyst scroll translation=\(String(format: "%.2f", translation.x))x\(String(format: "%.2f", translation.y))"
-                )
-
-                let scrollMods = TerminalScrollModifiers(precision: true)
-                surface?.sendMouseScroll(
-                    x: Double(translation.x),
-                    y: Double(translation.y),
-                    mods: scrollMods.rawValue
-                )
-            }
-
-            enum IndirectPointerPhase {
-                case began
-                case moved
-                case ended
-                case cancelled
-            }
-
-            func handleIndirectPointerTouches(
-                _ touches: Set<UITouch>,
-                phase: IndirectPointerPhase,
-                event: UIEvent?
-            ) -> Bool {
-                guard let touch = touches.first(where: { $0.type == .indirectPointer }) else {
-                    return false
-                }
-
-                becomeFirstResponder()
-                stopMomentumScrolling()
-
-                let button = pointerButton(from: event)
-                let mods = ghostty_input_mods_e(rawValue: 0)
-                let location = touch.location(in: self)
-                surface?.sendMousePos(
-                    x: location.x,
-                    y: location.y,
-                    mods: mods
-                )
-
-                switch phase {
-                case .began:
-                    activePointerButton = button
-                    surface?.sendMouseButton(
-                        state: GHOSTTY_MOUSE_PRESS,
-                        button: button,
-                        mods: mods
-                    )
-
-                case .moved:
-                    break
-
-                case .ended, .cancelled:
-                    let releasedButton = activePointerButton ?? button
-                    activePointerButton = nil
-                    surface?.sendMouseButton(
-                        state: GHOSTTY_MOUSE_RELEASE,
-                        button: releasedButton,
-                        mods: mods
-                    )
-                }
-
-                return true
-            }
-
-            func pointerButton(from event: UIEvent?) -> ghostty_input_mouse_button_e {
-                guard let event else { return GHOSTTY_MOUSE_LEFT }
-                if event.buttonMask.contains(.secondary) {
-                    return GHOSTTY_MOUSE_RIGHT
-                }
-                if event.buttonMask.contains(.primary) {
-                    return GHOSTTY_MOUSE_LEFT
-                }
-                return GHOSTTY_MOUSE_LEFT
-            }
-        #else
+        #if !targetEnvironment(macCatalyst)
             func setupTouchScrollInput() {
                 let gesture = UIPanGestureRecognizer(
                     target: self,
-                    action: #selector(handleTouchScrollGesture(_:))
+                    action: #selector(handleTouchScrollGesture(_:)),
                 )
+                gesture.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
                 gesture.maximumNumberOfTouches = 1
+                gesture.delegate = self
                 addGestureRecognizer(gesture)
+                touchSelection.scrollGesture = gesture
 
-                currentFontSize = configuration.fontSize ?? 14
+                let longPress = UILongPressGestureRecognizer(
+                    target: self,
+                    action: #selector(handleLongPressForSelection(_:)),
+                )
+                longPress.minimumPressDuration = 0.7
+                longPress.allowableMovement = 10
+                longPress.numberOfTouchesRequired = 1
+                longPress.numberOfTapsRequired = 0
+                longPress.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+                longPress.cancelsTouchesInView = false
+                longPress.delegate = self
+                addGestureRecognizer(longPress)
+                touchSelection.longPress = longPress
+
+                setupIndirectPointerSelectionGesture()
                 setupPinchZoomGesture()
+                setupTouchSelectionGestures()
+            }
+
+            /// One left click at `point`, the way a finger tap reaches the
+            /// terminal: a press and a release with no drag between them.
+            /// Any pointer-drag selection is over by definition — ghostty
+            /// clears its selection on the click.
+            func sendTapClick(at point: CGPoint) {
+                guard let surface else { return }
+                let mods = pointerMods()
+                sendPointerPosition(at: tapClickPoint(for: point, on: surface))
+                surface.sendMouseButton(
+                    state: GHOSTTY_MOUSE_PRESS,
+                    button: GHOSTTY_MOUSE_LEFT,
+                    mods: mods,
+                )
+                surface.sendMouseButton(
+                    state: GHOSTTY_MOUSE_RELEASE,
+                    button: GHOSTTY_MOUSE_LEFT,
+                    mods: mods,
+                )
+                pointer.lastSelectionRect = nil
+                pointer.selectionStartPoint = nil
+            }
+
+            /// Where a tap's click lands. A program tracking the mouse gets
+            /// the cell under the finger. Otherwise a tap below the cursor's
+            /// row clicks the cursor's own cell: ghostty keeps the clicked
+            /// cell pinned until the next press, and a pinned blank row
+            /// stops the keyboard's resize from trimming the blank rows
+            /// under it, so a tap low on a short screen pushed the lines at
+            /// the top into scrollback when the keyboard came up. On the
+            /// cursor's row the pin costs nothing — the cursor holds that
+            /// row already — and the click still clears a selection.
+            func tapClickPoint(for point: CGPoint, on surface: TerminalSurface) -> CGPoint {
+                guard !surface.isMouseCaptured else { return point }
+                // `imePoint` is the cursor cell's horizontal midpoint and
+                // bottom edge, in view points.
+                let cursor = surface.imePoint()
+                guard cursor.height > 0, point.y > cursor.y else { return point }
+                return CGPoint(x: cursor.x, y: cursor.y - cursor.height / 2)
+            }
+
+            /// Long press opens the touch menu; with inline selection off
+            /// the recognizer never begins (see `gestureRecognizerShouldBegin`).
+            @objc func handleLongPressForSelection(
+                _ gesture: UILongPressGestureRecognizer,
+            ) {
+                guard gesture.state == .began, usesInlineTextSelection else { return }
+                softwareKeyboard.tapCandidateArmed = false
+                presentTouchMenu(at: gesture.location(in: self))
             }
         #endif
 
-        @objc func handleTouchScrollGesture(
-            _ gesture: UIPanGestureRecognizer
-        ) {
-            switch gesture.state {
-            case .began:
-                #if !targetEnvironment(macCatalyst)
-                    touchDidScrollDuringCurrentTouch = true
-                #endif
-                TerminalDebugLog.log(.input, "touch scroll began")
-                stopMomentumScrolling()
-
-            case .changed:
-                let translation = gesture.translation(in: self)
-                gesture.setTranslation(.zero, in: self)
-                TerminalDebugLog.log(
-                    .input,
-                    "touch scroll changed translation=\(String(format: "%.2f", translation.x))x\(String(format: "%.2f", translation.y))"
-                )
-
-                let scrollMods = TerminalScrollModifiers(precision: true)
-                surface?.sendMouseScroll(
-                    x: Double(translation.x * touchScrollMultiplier),
-                    y: Double(translation.y * touchScrollMultiplier),
-                    mods: scrollMods.rawValue
-                )
-
-            case .ended:
-                let velocity = gesture.velocity(in: self)
-                TerminalDebugLog.log(
-                    .input,
-                    "touch scroll ended velocity=\(String(format: "%.2f", velocity.x))x\(String(format: "%.2f", velocity.y))"
-                )
-                startMomentumScrolling(velocity: velocity)
-
-            case .cancelled, .failed:
-                TerminalDebugLog.log(.input, "touch scroll cancelled")
-                stopMomentumScrolling()
-
-            default:
-                break
+        /// Touches on the selection handles belong to the overlay's own pan
+        /// recognizers. A single tap records, before UIKit can dismiss the
+        /// edit menu, whether it began with the menu open or a fling running.
+        public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            if let overlay = touchSelection.overlay, touch.view?.isDescendant(of: overlay) == true {
+                return false
             }
-        }
-
-        func startMomentumScrolling(velocity: CGPoint) {
-            guard abs(velocity.x) > 50 || abs(velocity.y) > 50 else { return }
-
-            momentumVelocity = velocity
-            TerminalDebugLog.log(
-                .input,
-                "momentum start velocity=\(String(format: "%.2f", velocity.x))x\(String(format: "%.2f", velocity.y))"
-            )
-
-            let mods = TerminalScrollModifiers(precision: true, momentum: .began)
-            surface?.sendMouseScroll(x: 0, y: 0, mods: mods.rawValue)
-
-            let link = CADisplayLink(
-                target: self,
-                selector: #selector(momentumScrollFrame(_:))
-            )
-            link.add(to: .main, forMode: .common)
-            momentumDisplayLink = link
-        }
-
-        @objc func momentumScrollFrame(_ link: CADisplayLink) {
-            let dt = link.targetTimestamp - link.timestamp
-            let deceleration: CGFloat = 0.92
-
-            momentumVelocity.x *= deceleration
-            momentumVelocity.y *= deceleration
-
-            let deltaX = momentumVelocity.x * dt * touchScrollMultiplier
-            let deltaY = momentumVelocity.y * dt * touchScrollMultiplier
-
-            if abs(momentumVelocity.x) < 50, abs(momentumVelocity.y) < 50 {
-                stopMomentumScrolling()
-                return
+            if usesInlineTextSelection, gestureRecognizer === touchSelection.tapRecognizers.first {
+                touchSelection.tapBeganWithMenu = isTouchMenuVisible
+                touchSelection.tapStopsMomentum = momentumScroll.displayLink != nil
+                if touchSelection.tapStopsMomentum {
+                    stopMomentumScrolling()
+                }
             }
-
-            TerminalDebugLog.log(
-                .input,
-                "momentum frame velocity=\(String(format: "%.2f", momentumVelocity.x))x\(String(format: "%.2f", momentumVelocity.y)) delta=\(String(format: "%.2f", deltaX))x\(String(format: "%.2f", deltaY))"
-            )
-
-            let mods = TerminalScrollModifiers(precision: true, momentum: .changed)
-            surface?.sendMouseScroll(
-                x: Double(deltaX),
-                y: Double(deltaY),
-                mods: mods.rawValue
-            )
+            return true
         }
 
-        func stopMomentumScrolling() {
-            guard momentumDisplayLink != nil else { return }
-            TerminalDebugLog.log(.input, "momentum stop")
-
-            let mods = TerminalScrollModifiers(precision: true, momentum: .none)
-            surface?.sendMouseScroll(x: 0, y: 0, mods: mods.rawValue)
-
-            momentumDisplayLink?.invalidate()
-            momentumDisplayLink = nil
-            momentumVelocity = .zero
+        /// Gate the long-press recognizer at the gesture layer while inline
+        /// selection is off (always on Mac Catalyst). Without this, the
+        /// recognizer still enters the touch arena and can subtly delay pan
+        /// recognition for hosts that opted out.
+        override open func gestureRecognizerShouldBegin(
+            _ gestureRecognizer: UIGestureRecognizer,
+        ) -> Bool {
+            if gestureRecognizer is UILongPressGestureRecognizer {
+                return usesInlineTextSelection
+            }
+            return true
         }
     }
 #endif

@@ -7,7 +7,7 @@
 
 import GhosttyKit
 
-#if canImport(AppKit) && !canImport(UIKit)
+#if !canImport(UIKit) && canImport(AppKit)
     import AppKit
 #endif
 
@@ -20,7 +20,9 @@ public struct TerminalScrollModifiers: Sendable {
 
     public init(precision: Bool, momentum: Momentum = .none) {
         var value: Int32 = 0
-        if precision { value |= 1 }
+        if precision {
+            value |= 1
+        }
         value |= momentum.rawValue << 1
         rawValue = value
     }
@@ -40,11 +42,17 @@ public struct TerminalScrollModifiers: Sendable {
         case changed = 3
     }
 
-    #if canImport(AppKit) && !canImport(UIKit)
+    #if !canImport(UIKit) && canImport(AppKit)
         static func momentumFrom(phase: NSEvent.Phase) -> Momentum {
-            if phase.contains(.began) { return .began }
-            if phase.contains(.stationary) { return .stationary }
-            if phase.contains(.changed) { return .changed }
+            if phase.contains(.began) {
+                return .began
+            }
+            if phase.contains(.stationary) {
+                return .stationary
+            }
+            if phase.contains(.changed) {
+                return .changed
+            }
             return .none
         }
     #endif

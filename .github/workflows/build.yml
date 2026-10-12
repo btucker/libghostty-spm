@@ -1,131 +1,58 @@
-name: Build GhosttyKit
+name: Build Upstream XCFramework
+
+# Builds the GhosttyKit XCFramework from the pinned upstream Ghostty commit
+# (Ghostty.ref) and publishes it on the `upstream.<sha12>` release tag —
+# `upstream.<sha12>-<Ghostty.build>` for a rebuild of the same commit with a
+# changed patch stack or target set (Script/storage-tag.sh). Swift package
+# releases (bare semver tags, 1.4.0+) are cut separately by release.yml and
+# reference the asset published here — a Swift-only change never rebuilds
+# the Zig core.
 
 on:
   workflow_dispatch:
-    inputs:
-      ghostty_ref:
-        description: "Ghostty tag or commit. Leave empty to auto-detect latest."
-        required: false
-        type: string
-        default: ""
-  schedule:
-    - cron: "23 6 * * 1"
 
 permissions:
   contents: write
 
 concurrency:
-  group: build-${{ github.ref_name || 'scheduled' }}
+  group: build-upstream
   cancel-in-progress: true
 
 jobs:
   prepare:
     runs-on: macos-15
     outputs:
-      build_needed: ${{ steps.check.outputs.build_needed }}
-      build_ref: ${{ steps.ref.outputs.build_ref }}
-      resolved_build_ref: ${{ steps.ref.outputs.resolved_build_ref }}
-      resolved_sha: ${{ steps.ref.outputs.resolved_sha }}
-      release_suffix: ${{ steps.ref.outputs.release_suffix }}
-      release_tag: ${{ steps.ref.outputs.release_tag }}
-      storage_release_tag: ${{ steps.ref.outputs.storage_release_tag }}
-      do_release: ${{ steps.ref.outputs.do_release }}
+      build_needed: ${{ steps.release.outputs.build_needed }}
+      ghostty_ref: ${{ steps.release.outputs.ghostty_ref }}
+      storage_tag: ${{ steps.release.outputs.storage_tag }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Determine Ghostty Ref
-        id: ref
+      - name: Resolve Upstream Commit
+        id: release
         run: |
-          INPUT_REF="${{ github.event.inputs.ghostty_ref }}"
-          SKIP_RELEASE="${{ github.event.inputs.skip_release || 'false' }}"
-          EVENT="${{ github.event_name }}"
+          GHOSTTY_REF=$(tr -d '[:space:]' < Ghostty.ref)
+          STORAGE_TAG=$(./Script/storage-tag.sh)
 
-          if [ "$EVENT" = "schedule" ]; then
-            SKIP_RELEASE="false"
-          elif [ "$EVENT" != "workflow_dispatch" ]; then
-            SKIP_RELEASE="true"
-          fi
+          gh api "repos/ghostty-org/ghostty/commits/$GHOSTTY_REF" --jq '.sha' >/dev/null
 
-          if [ -n "$INPUT_REF" ]; then
-            BUILD_REF="$INPUT_REF"
-            echo "[*] using provided ghostty ref: $BUILD_REF"
-          else
-            BUILD_REF=$(
-              gh api "repos/ghostty-org/ghostty/tags?per_page=100" --paginate --jq '.[].name' |
-                python3 -c 'import re, sys; tags = [line.strip() for line in sys.stdin if re.fullmatch(r"v?\d+\.\d+\.\d+", line.strip())]; print(max(tags, key=lambda tag: tuple(int(part) for part in (tag[1:] if tag.startswith("v") else tag).split("."))), end="")'
-            )
-            echo "[*] upstream ghostty ref: $BUILD_REF"
-          fi
-
-          if [ -z "$BUILD_REF" ]; then
-            echo "[!] failed to determine ghostty ref"
-            echo "build_ref=" >> "$GITHUB_OUTPUT"
-            echo "do_release=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [[ "$BUILD_REF" == http://* || "$BUILD_REF" == https://* ]]; then
-            echo "[!] build_ref looks like a URL, not a git ref: $BUILD_REF"
-            exit 1
-          fi
-
-          RESOLVED_SHA=$(gh api "repos/ghostty-org/ghostty/commits/$BUILD_REF" --jq '.sha')
-          if [ -z "$RESOLVED_SHA" ]; then
-            echo "[!] failed to resolve commit sha for $BUILD_REF"
-            exit 1
-          fi
-
-          SHORT_SHA=$(printf '%s' "$RESOLVED_SHA" | cut -c1-12)
-
-          RELEASE_SUFFIX=$(date +%s)
-          RELEASE_TAG="1.0.$RELEASE_SUFFIX"
-          STORAGE_RELEASE_TAG="storage.$RELEASE_TAG"
-
-          if [ "$SKIP_RELEASE" = "true" ]; then
-            DO_RELEASE="false"
-          else
-            DO_RELEASE="true"
-          fi
-
-          echo "[*] build_ref=$BUILD_REF resolved_sha=$RESOLVED_SHA release_tag=$RELEASE_TAG do_release=$DO_RELEASE"
-
-          echo "build_ref=$BUILD_REF" >> "$GITHUB_OUTPUT"
-          echo "resolved_build_ref=$BUILD_REF" >> "$GITHUB_OUTPUT"
-          echo "resolved_sha=$RESOLVED_SHA" >> "$GITHUB_OUTPUT"
-          echo "release_suffix=$RELEASE_SUFFIX" >> "$GITHUB_OUTPUT"
-          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
-          echo "storage_release_tag=$STORAGE_RELEASE_TAG" >> "$GITHUB_OUTPUT"
-          echo "do_release=$DO_RELEASE" >> "$GITHUB_OUTPUT"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Check If Build Needed
-        id: check
-        run: |
-          BUILD_REF="${{ steps.ref.outputs.build_ref }}"
-          DO_RELEASE="${{ steps.ref.outputs.do_release }}"
-          STORAGE_RELEASE_TAG="${{ steps.ref.outputs.storage_release_tag }}"
-
-          if [ -z "$BUILD_REF" ]; then
-            echo "[*] no valid ghostty ref, skipping"
+          git fetch --tags origin
+          if git rev-parse "refs/tags/$STORAGE_TAG" >/dev/null 2>&1; then
+            echo "[*] $STORAGE_TAG already published, nothing to build"
             echo "build_needed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if [ "$DO_RELEASE" = "true" ] && [ -n "$STORAGE_RELEASE_TAG" ]; then
-            git fetch --tags origin
-            if git rev-parse "$STORAGE_RELEASE_TAG" >/dev/null 2>&1; then
-              echo "[*] release $STORAGE_RELEASE_TAG already exists, skipping"
-              echo "build_needed=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          fi
-
+          echo "[*] building $GHOSTTY_REF -> $STORAGE_TAG"
           echo "build_needed=true" >> "$GITHUB_OUTPUT"
+          echo "ghostty_ref=$GHOSTTY_REF" >> "$GITHUB_OUTPUT"
+          echo "storage_tag=$STORAGE_TAG" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-target:
     needs: prepare
@@ -147,24 +74,33 @@ jobs:
             cpu: apple_a17
           - target: x86_64-ios-simulator
             variant: iphonesimulator
-          - target: aarch64-ios-macabi
+          - target: aarch64-maccatalyst
             variant: maccatalyst
             cpu: apple_a17
-          - target: x86_64-ios-macabi
+          - target: x86_64-maccatalyst
             variant: maccatalyst
+          - target: aarch64-visionos
+            variant: xros
+          - target: aarch64-visionos-simulator
+            variant: xrsimulator
+            cpu: apple_a17
+          - target: x86_64-visionos-simulator
+            variant: xrsimulator
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Zig
+        # Keep in sync with minimum_zig_version in the pinned upstream's
+        # build.zig.zon; a version drift fails every target at once.
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.2
+          version: 0.16.0
 
       - name: Clone Ghostty
         run: |
           git clone https://github.com/ghostty-org/ghostty ./References/ghostty-upstream
-          git -C ./References/ghostty-upstream checkout "${{ needs.prepare.outputs.build_ref }}"
+          git -C ./References/ghostty-upstream checkout "${{ needs.prepare.outputs.ghostty_ref }}"
 
       - name: Build Target
         run: |
@@ -185,14 +121,14 @@ jobs:
           compression-level: 0
           retention-days: 1
 
-  merge-test-release:
+  merge-release:
     needs: [prepare, build-target]
     if: needs.prepare.outputs.build_needed == 'true'
     runs-on: macos-26
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -251,70 +187,23 @@ jobs:
             "$PWD/BinaryTarget/GhosttyKit.xcframework" \
             "$PWD/build/GhosttyKit.xcframework.zip"
 
-      - name: Use Local Binary Target
-        run: cp Package.local.swift Package.swift
+      - name: Test XCFramework Consumer
+        run: ./Script/test-xcframework-consumer.sh "$PWD/BinaryTarget/GhosttyKit.xcframework"
 
-      - name: Build Package Matrix
-        run: ./Script/test.sh
+      - name: Stage Asset
+        run: mv ./build/GhosttyKit.xcframework.zip ./GhosttyKit.xcframework.zip
 
-      - name: Run Swift Tests
-        run: swift test
-
-      - name: Upload Build Artifact
-        if: needs.prepare.outputs.do_release != 'true'
-        uses: actions/upload-artifact@v4
+      - name: Create Upstream Release
+        uses: softprops/action-gh-release@v3
         with:
-          name: GhosttyKit-xcframework
-          path: ./build/GhosttyKit.xcframework.zip
-          compression-level: 0
-          retention-days: 7
-
-      - name: Prepare Release
-        if: needs.prepare.outputs.do_release == 'true'
-        run: |
-          STORAGE_RELEASE_TAG="${{ needs.prepare.outputs.storage_release_tag }}"
-          DOWNLOAD_URL="https://github.com/${{ github.repository }}/releases/download/$STORAGE_RELEASE_TAG/GhosttyKit.xcframework.zip"
-          echo "[*] predicted download url: $DOWNLOAD_URL"
-
-          mv ./build/GhosttyKit.xcframework.zip /tmp/GhosttyKit.xcframework.zip
-          git clean -fdx -f
-          git reset --hard
-          mv /tmp/GhosttyKit.xcframework.zip ./GhosttyKit.xcframework.zip
-          ./Script/build-manifest.sh GhosttyKit.xcframework.zip "$DOWNLOAD_URL"
-
-      - name: Commit & Push
-        if: needs.prepare.outputs.do_release == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "chore: autopublish $(date -u +%Y-%m-%dT%H:%M:%SZ)" || echo "No changes to commit"
-          git push
-
-      - name: Create Storage Release
-        if: needs.prepare.outputs.do_release == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.prepare.outputs.storage_release_tag }}
+          tag_name: ${{ needs.prepare.outputs.storage_tag }}
+          target_commitish: ${{ github.ref_name }}
           body: |
             GhosttyKit XCFramework
 
-            Built from ghostty ref: ${{ needs.prepare.outputs.build_ref }}
-            Built from ghostty sha: ${{ needs.prepare.outputs.resolved_sha }}
+            Ghostty commit: https://github.com/ghostty-org/ghostty/commit/${{ needs.prepare.outputs.ghostty_ref }}
+            Slices: macOS, iOS, iOS Simulator, Mac Catalyst, visionOS, visionOS Simulator
           draft: false
           prerelease: false
           files: |
             GhosttyKit.xcframework.zip
-
-      - name: Create Release
-        if: needs.prepare.outputs.do_release == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.prepare.outputs.release_tag }}
-          body: |
-            GhosttyKit ${{ needs.prepare.outputs.release_tag }}
-
-            Built from ghostty ref: ${{ needs.prepare.outputs.build_ref }}
-            Built from ghostty sha: ${{ needs.prepare.outputs.resolved_sha }}
-          draft: false
-          prerelease: false

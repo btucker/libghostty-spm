@@ -8,7 +8,6 @@ binpack*
 BinaryTarget/
 
 # Xcode
-*.xcodeproj
 xcuserdata/
 *.xcuserstate
 .swiftpm/
@@ -53,3 +52,4 @@ Temporary Items
 /Packages
 /References
 /references
+Script/support/__pycache__
