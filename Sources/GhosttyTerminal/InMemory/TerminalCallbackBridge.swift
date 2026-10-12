@@ -20,12 +20,15 @@ final class TerminalCallbackBridge {
     nonisolated(unsafe) var rawSurface: ghostty_surface_t?
     var onCellSizeChange: ((UInt32, UInt32) -> Void)?
     var onRenderRequest: (() -> Void)?
+    /// Native mailbox drains during teardown must not reenter the retiring view.
+    var isRetiring = false
 
     init(delegate: (any TerminalSurfaceViewDelegate)? = nil) {
         self.delegate = delegate
     }
 
     func handleAction(_ action: ghostty_action_s) {
+        guard !isRetiring else { return }
         switch action.tag {
         case GHOSTTY_ACTION_SET_TITLE:
             if let cStr = action.action.set_title.title {
@@ -166,6 +169,7 @@ final class TerminalCallbackBridge {
     }
 
     func handleClose(processAlive: Bool) {
+        guard !isRetiring else { return }
         TerminalDebugLog.log(
             .lifecycle,
             "callback close processAlive=\(processAlive)"
@@ -179,6 +183,10 @@ final class TerminalCallbackBridge {
         kind: TerminalClipboardRequestKind,
         completion: @escaping (Bool) -> Void
     ) {
+        guard !isRetiring else {
+            completion(false)
+            return
+        }
         guard let delegate = delegate as? any TerminalSurfaceClipboardConfirmationDelegate else {
             completion(false)
             return
