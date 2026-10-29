@@ -18,7 +18,9 @@ def inputs(root):
         raise ValueError('Ghostty.ref and paging recipe disagree')
     paths = [root / 'Ghostty.ref', root / 'Paging/recipe.json']
     paths += [root / 'Paging' / (name + '.patch') for name in recipe['rendererPatches']]
+    paths += sorted((root / 'Patches/zig').glob(recipe['zig'] + '-*.patch'))
     paths += [root / name for name in ('Script/build-ghostty.sh', 'Script/apply-patches.sh',
+                                     'Script/prepare-zig-lib.sh',
                                      'Script/support/libcxx-verbose-abort-compat.c',
                                      'Script/build.sh', 'Script/build-platform.sh', 'Script/merge-xcframework.sh',
                                      'Script/verify-xcframework.sh', 'Paging/pack-xcframework.py',

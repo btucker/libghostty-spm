@@ -30,7 +30,7 @@ language mode.
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/btucker/libghostty-spm.git", from: "1.5.2"),
+    .package(url: "https://github.com/btucker/libghostty-spm.git", from: "3.0.2026102902"),
 ]
 ```
 

@@ -21,12 +21,15 @@ cache=${BUILD_CACHE_ROOT:-$root/build/cache}
 mkdir -p "$cache" "$output/lib" "$output/include/libghostty"
 cache=$(cd "$cache" && pwd)
 output=$(cd "$output" && pwd)
+case "$target" in
+    *-ios*) export ZIG_LIB_DIR="$(./Script/prepare-zig-lib.sh "$cache" ios-std)" ;;
+esac
 args=(build -Demit-exe=false -Demit-macos-app=false -Demit-xcframework=false
     -Demit-docs=false -Dsentry=false -Doptimize=ReleaseSafe -Dapp-runtime=none
-    "-Dtarget=$target" --global-cache-dir "$cache/zig-global"
+    "-Dtarget=$target"
     --cache-dir "$cache/$target" --prefix "$output" --summary failures)
 if [[ -n "$cpu" ]]; then args+=("-Dcpu=$cpu"); fi
-(cd "$source_dir"; zig "${args[@]}")
+(cd "$source_dir"; ZIG_GLOBAL_CACHE_DIR="$cache/zig-global" zig "${args[@]}")
 xcrun --sdk "$sdk" clang -target "$clang_target" -Os -fno-sanitize=undefined \
     -c "$root/Script/support/libcxx-verbose-abort-compat.c" -o "$cache/$target-compat.o"
 xcrun libtool -static -no_warning_for_no_symbols -o "$output/lib/libghostty-compat.a" \

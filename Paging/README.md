@@ -1,24 +1,24 @@
 # Production paging package
 
 This fork owns the production renderer used by Graftty on macOS and iOS.
-`recipe.json` preserves engine `8af6897c0afc63037a8a3efee4162a380e3a4572`,
-Zig 0.16.0, and the eleven native patches previously assembled in Graftty.
-`screen-text-history.patch` also retains the wrapper fork's existing absolute
-history selection fix on this engine. The full wrapper test suite exposed its
-absence when reading rows beyond the live grid; no engine upgrade is needed.
-The three Swift wrapper patches are applied directly to `Sources/` and `Tests/`,
-on wrapper baseline `da4d8ddc94ba66f89efa5208961a1116357117c3`.
-The snapshot ABI remains `ghostty-8af6897c-paging-1`, compatible with Graftty's
-existing zmx producer. This change does not upgrade the engine or zmx.
+`recipe.json` pins Ghostty 1.4.0 at
+`83fb95624b0439ee660c2679b43b38c8b63769cd` and Zig 0.17.0.
+The native patches retain host-managed I/O, UIKit rendering, and paged history.
+The Swift wrapper baseline remains `da4d8ddc94ba66f89efa5208961a1116357117c3`.
+
+The snapshot ABI remains `ghostty-8af6897c-paging-1` for the existing zmx
+producer. Ghostty 1.4.0 retains all 22 existing snapshot golden fixtures without
+changes. The package upgrade must also pass the native attachment and history
+probes before publication. This change does not upgrade zmx or restart sessions.
 
 The production package contains universal macOS, arm64 iOS, and universal iOS
 Simulator slices. Catalyst and visionOS require a separate engine integration;
-this release does not advertise those platforms. The former `Patches/ghostty`
-stack targets the newer engine and is not applied by the production build.
+this release does not advertise those platforms. The historical `Patches/ghostty`
+stack is not applied by the production build.
 Weekly automatic engine upgrades have been removed so source changes require
 an explicit patch and snapshot compatibility review.
 
-Run `./build.sh` with Xcode, the Metal toolchain, and Zig 0.16.0 on PATH.
+Run `./build.sh` with Xcode, the Metal toolchain, and Zig 0.17.0 on PATH.
 Use `--source PATH` for an isolated clean checkout of `Ghostty.ref`.
 `BUILD_CACHE_ROOT` can place native caches on another volume.
 A changed patch recipe requires a fresh source checkout. Do not reuse a source

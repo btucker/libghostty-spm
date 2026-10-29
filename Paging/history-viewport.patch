@@ -1,6 +1,23 @@
+diff --git a/include/ghostty.h b/include/ghostty.h
+index f266516..e0d8e89 100644
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -1272,6 +1272,10 @@ GHOSTTY_API bool ghostty_surface_read_selection(ghostty_surface_t, ghostty_text_
+ GHOSTTY_API bool ghostty_surface_read_text(ghostty_surface_t,
+                                               ghostty_selection_s,
+                                               ghostty_text_s*);
++// Current native font size, including runtime zoom. Call on the UI thread.
++GHOSTTY_API float ghostty_surface_font_size(ghostty_surface_t);
++// Read styled history without moving the viewport. offset_len returns row count.
++GHOSTTY_API bool ghostty_surface_read_history(ghostty_surface_t, uint64_t before_row, uint32_t rows, ghostty_text_s*);
+ GHOSTTY_API void ghostty_surface_free_text(ghostty_surface_t, ghostty_text_s*);
+ 
+ #ifdef __APPLE__
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+index 82ac102..cb98924 100644
 --- a/src/apprt/embedded.zig
 +++ b/src/apprt/embedded.zig
-@@ -2201,6 +2201,57 @@
+@@ -2241,6 +2241,57 @@ pub const CAPI = struct {
          ptr.deinit();
      }
  
@@ -58,50 +75,38 @@
      /// Tell the surface that it needs to schedule a render
      export fn ghostty_surface_refresh(surface: *Surface) void {
          surface.refresh();
---- a/include/ghostty.h
-+++ b/include/ghostty.h
-@@ -1263,6 +1263,10 @@
- GHOSTTY_API bool ghostty_surface_read_text(ghostty_surface_t,
-                                               ghostty_selection_s,
-                                               ghostty_text_s*);
-+// Current native font size, including runtime zoom. Call on the UI thread.
-+GHOSTTY_API float ghostty_surface_font_size(ghostty_surface_t);
-+// Read styled history without moving the viewport. offset_len returns row count.
-+GHOSTTY_API bool ghostty_surface_read_history(ghostty_surface_t, uint64_t before_row, uint32_t rows, ghostty_text_s*);
- GHOSTTY_API void ghostty_surface_free_text(ghostty_surface_t, ghostty_text_s*);
- 
- #ifdef __APPLE__
+diff --git a/src/terminal/formatter.zig b/src/terminal/formatter.zig
+index f1ec6b7..127a772 100644
 --- a/src/terminal/formatter.zig
 +++ b/src/terminal/formatter.zig
-@@ -96,6 +96,10 @@
-     /// is currently only space characters (0x20).
+@@ -97,6 +97,9 @@ pub const Options = struct {
+     /// Whitespace is currently only space characters (0x20).
      trim: bool = true,
  
-+    /// Preserve textless rows with cell backgrounds in styled history copies.
-+    /// Plain text continues to omit cell styling.
++    /// Preserve styled textless rows when copying history as HTML or VT.
 +    preserve_styled_blank_rows: bool = false,
 +
      /// Replace matching Unicode codepoints with some other values.
      /// This will use the last matching range found in the list.
      codepoint_map: ?std.MultiArrayList(CodepointMap) = .{},
-@@ -1216,7 +1220,15 @@
-             // If this row is blank, accumulate to avoid a bunch of extra
-             // work later. If it isn't blank, make sure we dump all our
-             // blanks.
--            if (!Cell.hasTextAny(cells_subset)) {
-+            const blank_row = blank: {
+@@ -1278,7 +1281,15 @@ pub const PageFormatter = struct {
+             // blanks. In VT a row of cells that only carry a background
+             // (erased while a background color was set) isn't blank,
+             // since dropping it would lose the color.
+-            if (!Cell.hasTextAny(cells_subset) and
++            const preserve_styling = self.opts.preserve_styled_blank_rows and emit != .plain;
++            const styled = styled: {
++                if (!preserve_styling) break :styled false;
 +                for (cells_subset) |cell| {
-+                    if (cell.hasText()) break :blank false;
-+                    if (emit != .plain and self.opts.preserve_styled_blank_rows and
-+                        (!cell.isEmpty() or cell.hasStyling())) break :blank false;
++                    if (!cell.isEmpty() or cell.hasStyling()) break :styled true;
 +                }
-+                break :blank true;
++                break :styled false;
 +            };
-+            if (blank_row) {
++            if (!Cell.hasTextAny(cells_subset) and !styled and
+                 !(emit == .vt and hasBackgroundAny(cells_subset)))
+             {
                  blank_rows += 1;
-                 continue;
-             }
-@@ -7028,3 +7040,48 @@
+@@ -8201,3 +8212,48 @@ test "Page HTML hyperlink point map maps closing to previous cell" {
          try testing.expectEqual(expected_coord, point_map.items[i]);
      }
  }
