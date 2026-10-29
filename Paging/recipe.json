@@ -13,7 +13,8 @@
     "scrollbar-state",
     "history-boundary",
     "source-grid",
-    "snapshot-pwd"
+    "snapshot-pwd",
+    "screen-text-history"
   ],
   "schemaVersion": 1,
   "snapshotABI": "ghostty-8af6897c-paging-1"

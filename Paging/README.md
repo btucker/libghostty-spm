@@ -3,6 +3,9 @@
 This fork owns the production renderer used by Graftty on macOS and iOS.
 `recipe.json` preserves engine `8af6897c0afc63037a8a3efee4162a380e3a4572`,
 Zig 0.16.0, and the eleven native patches previously assembled in Graftty.
+`screen-text-history.patch` also retains the wrapper fork's existing absolute
+history selection fix on this engine. The full wrapper test suite exposed its
+absence when reading rows beyond the live grid; no engine upgrade is needed.
 The three Swift wrapper patches are applied directly to `Sources/` and `Tests/`,
 on wrapper baseline `da4d8ddc94ba66f89efa5208961a1116357117c3`.
 The snapshot ABI remains `ghostty-8af6897c-paging-1`, compatible with Graftty's

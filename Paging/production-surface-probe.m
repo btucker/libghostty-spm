@@ -2,6 +2,7 @@
 #if TARGET_OS_IPHONE
 #import <UIKit/UIKit.h>
 #define PROBE_PLATFORM "UIKit"
+static UIWindowScene *probe_scene;
 #else
 #import <AppKit/AppKit.h>
 #define PROBE_PLATFORM "AppKit"
@@ -238,6 +239,7 @@ static void write_clipboard(void *data, ghostty_clipboard_e clipboard,
 }
 
 static int run_probe(int argc, char **argv, NSData *snapshot, NSData *mode_snapshot) {
+    setvbuf(stdout, NULL, _IONBF, 0);
     @autoreleasepool {
         assert(snapshot.length > 0);
         assert(mode_snapshot.length > 0);
@@ -250,7 +252,8 @@ static int run_probe(int argc, char **argv, NSData *snapshot, NSData *mode_snaps
             const bool needs_recovery = (scenario >= 2 && scenario <= 4) || scenario >= 8;
             const bool limited = scenario == 7;
 #if TARGET_OS_IPHONE
-            UIWindow *window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
+            UIWindow *window = [[UIWindow alloc] initWithWindowScene:probe_scene];
+            window.frame = UIScreen.mainScreen.bounds;
             window.rootViewController = [UIViewController new];
             UIView *view = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 800, 480)];
             [window.rootViewController.view addSubview:view];
@@ -548,13 +551,19 @@ static int probe_argc;
 static char **probe_argv;
 
 @interface ProbeAppDelegate : UIResponder <UIApplicationDelegate>
+@end
+@implementation ProbeAppDelegate
+@end
+
+@interface ProbeSceneDelegate : UIResponder <UIWindowSceneDelegate>
 @property(nonatomic, strong) UIWindow *window;
 @end
 
-@implementation ProbeAppDelegate
-- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)options {
-    (void)application; (void)options;
-    self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
+@implementation ProbeSceneDelegate
+- (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)options {
+    (void)session; (void)options;
+    probe_scene = (UIWindowScene *)scene;
+    self.window = [[UIWindow alloc] initWithWindowScene:probe_scene];
     self.window.rootViewController = [UIViewController new];
     [self.window makeKeyAndVisible];
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -563,7 +572,6 @@ static char **probe_argv;
         NSString *mode_path = [[NSBundle mainBundle] pathForResource:@"surface-modes" ofType:@"bin"];
         exit(run_probe(probe_argc, probe_argv, snapshot, [NSData dataWithContentsOfFile:mode_path]));
     });
-    return YES;
 }
 @end
 
