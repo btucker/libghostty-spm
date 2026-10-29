@@ -46,6 +46,15 @@ Publication uses the existing two-stage release route:
    the supported destinations, and runs the Swift tests. It commits the manifest
    and receipt, then publishes the package version. Never push a semver tag by hand.
 
+When publishing a branch that changes `.github/workflows/` relative to `main`,
+GitHub requires workflow-write authentication that `GITHUB_TOKEN` cannot have.
+Dispatch each workflow with `publish=false`, then run
+`python3 Script/finalize-release.py RUN_ID` with an authorized local `gh` login.
+The helper accepts only a successful matching workflow, downloads its tested
+handoff, verifies checksums and commit bindings, and publishes the exact result.
+It refuses to replace an existing release. This uses the same assembly and test
+route without storing the local credential in CI. Do not create tags manually.
+
 Bump `Ghostty.build` whenever native patch inputs change for the same engine.
 Never replace an existing storage asset. Graftty pins the resulting package
 commit and uses it for development, CI, and release builds.

@@ -11,6 +11,11 @@ name: Build Upstream XCFramework
 on:
   workflow_dispatch:
     inputs:
+      publish:
+        description: Publish with GITHUB_TOKEN. Disable for a tested handoff when this branch changes workflows.
+        required: false
+        type: boolean
+        default: true
       native_run_id:
         description: Reuse native slices from a completed build.yml run with identical native inputs.
         required: false
@@ -230,7 +235,29 @@ jobs:
       - name: Stage Asset
         run: mv ./build/GhosttyKit.xcframework.zip ./GhosttyKit.xcframework.zip
 
+      - name: Stage Tested Publication
+        run: |
+          mkdir -p build/publication
+          cp GhosttyKit.xcframework.zip PAGING-BUILD.json SHA256SUMS build/publication/
+          python3 - <<'METADATA'
+          import json, os
+          from pathlib import Path
+          Path('build/publication/release.json').write_text(json.dumps({
+              'kind': 'native', 'tag': '${{ needs.prepare.outputs.storage_tag }}',
+              'commit': os.environ['GITHUB_SHA'], 'workflowCommit': os.environ['GITHUB_SHA']
+          }) + '\n')
+          METADATA
+
+      - name: Upload Tested Publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: publication
+          path: build/publication/
+          retention-days: 7
+          compression-level: 0
+
       - name: Create Upstream Release
+        if: inputs.publish
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare.outputs.storage_tag }}
@@ -242,6 +269,7 @@ jobs:
             Slices: universal macOS, arm64 iOS, universal iOS Simulator
           draft: false
           prerelease: false
+          overwrite_files: false
           files: |
             GhosttyKit.xcframework.zip
             PAGING-BUILD.json
