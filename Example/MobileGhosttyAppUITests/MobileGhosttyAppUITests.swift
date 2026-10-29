@@ -362,7 +362,12 @@ import XCTest
             #if targetEnvironment(macCatalyst)
                 terminal.scroll(byDeltaX: 0, deltaY: 300)
             #else
-                terminal.swipeDown(velocity: .fast)
+                // Explicit coordinates keep the pan inside the terminal after
+                // keyboard/rotation layout. Release while stationary so the
+                // next input is not consumed by stopping scroll momentum.
+                let start = terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
+                let end = terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
+                start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.5)
             #endif
         }
 
@@ -853,11 +858,7 @@ import XCTest
                     let output = app.descendants(matching: .any)["terminal.output"].firstMatch
                     if edge > 0.5 {
                         let bottom = try XCTUnwrap(rows(in: try XCTUnwrap(output.value as? String)).min())
-                        // Pause before release so this pan has no momentum;
-                        // otherwise the next tap only stops the scrolling.
-                        let scrollStart = terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
-                        let scrollEnd = terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
-                        scrollStart.press(forDuration: 0.1, thenDragTo: scrollEnd, withVelocity: .slow, thenHoldForDuration: 0.5)
+                        scrollTerminalIntoHistory(terminal)
                         _ = try XCTUnwrap(waitForViewport("history before bottom-edge selection") {
                             guard let first = rows(in: $0).min() else { return false }
                             return first < bottom
