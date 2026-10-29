@@ -43,6 +43,16 @@ class ProvenanceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.module.verify(self.root, self.binary)
 
+    def test_mutated_zig_std_patch_is_rejected(self):
+        recipe = json.loads((self.root / 'Paging/recipe.json').read_text())
+        patch = self.root / 'Patches/zig' / (recipe['zig'] + '-ios-std.patch')
+        patch.parent.mkdir(parents=True)
+        patch.write_text('original standard library patch')
+        self.module.write(self.root, self.binary, 'fixture-source', False)
+        patch.write_text('changed standard library patch')
+        with self.assertRaises(ValueError):
+            self.module.verify(self.root, self.binary)
+
     def test_unrecorded_binary_is_rejected(self):
         (self.binary / 'extra.a').write_bytes(b'unrecorded')
         with self.assertRaises(ValueError):

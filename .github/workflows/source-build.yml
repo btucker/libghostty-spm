@@ -45,7 +45,7 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.0
 
       - name: Clone Ghostty
         run: |
@@ -62,3 +62,10 @@ jobs:
             "$PWD/References/ghostty-upstream" \
             "${{ matrix.target }}" \
             "$RUNNER_TEMP/libghostty"
+
+      - name: Run VT regression tests
+        if: matrix.target == 'aarch64-macos'
+        working-directory: References/ghostty-upstream
+        env:
+          ZIG_GLOBAL_CACHE_DIR: ${{ runner.temp }}/libghostty-vt-global
+        run: zig build test-lib-vt --cache-dir "$RUNNER_TEMP/libghostty-vt-local" --summary all

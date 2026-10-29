@@ -1,7 +1,7 @@
 {
-  "renderer": "8af6897c0afc63037a8a3efee4162a380e3a4572",
+  "renderer": "83fb95624b0439ee660c2679b43b38c8b63769cd",
   "wrapper": "da4d8ddc94ba66f89efa5208961a1116357117c3",
-  "zig": "0.16.0",
+  "zig": "0.17.0",
   "rendererPatches": [
     "preserve-top-anchor",
     "resize-history-guard",
@@ -14,7 +14,8 @@
     "history-boundary",
     "source-grid",
     "snapshot-pwd",
-    "screen-text-history"
+    "screen-text-history",
+    "upstream-1.4-compatibility"
   ],
   "schemaVersion": 1,
   "snapshotABI": "ghostty-8af6897c-paging-1"

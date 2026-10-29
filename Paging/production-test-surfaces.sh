@@ -2,21 +2,23 @@
 set -euo pipefail
 
 if [[ $# -lt 2 || $# -gt 3 ]]; then
-    echo "Usage: $0 <patched-ghostty-source> <zig-0.16.0-executable> [simulator-udid]" >&2
+    echo "Usage: $0 <patched-ghostty-source> <zig-0.17.0-executable> [simulator-udid]" >&2
     exit 2
 fi
 probe_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ghostty_source=$(cd "$1" && pwd)
 zig_bin=$(command -v "$2")
 zig_bin=$(cd "$(dirname "$zig_bin")" && pwd)/$(basename "$zig_bin")
-if [[ $("$zig_bin" version) != 0.16.0 ]]; then
-    echo "This test requires Zig 0.16.0." >&2
+if [[ $("$zig_bin" version) != 0.17.0 ]]; then
+    echo "This test requires Zig 0.17.0." >&2
     exit 2
 fi
 xcrun --sdk macosx metal --version
 
 probe_build=$(mktemp -d "${TMPDIR:-/tmp}/graftty-surface-probe.XXXXXX")
 echo "Native paging test artifacts: $probe_build"
+# Stage the iOS standard-library fix without changing the installed compiler.
+export ZIG_LIB_DIR="$(PATH="$(dirname "$zig_bin"):$PATH" "$probe_dir/../Script/prepare-zig-lib.sh" "${BUILD_CACHE_ROOT:-$probe_build/cache}" ios-std)"
 probe_cflags=()
 if [[ ${GRAFTTY_SELECTION_RESIZE_PROBE:-0} == 1 ]]; then
     # The deterministic mouse/resize seam is never compiled into production
@@ -28,10 +30,10 @@ if [[ ${GRAFTTY_SELECTION_RESIZE_PROBE:-0} == 1 ]]; then
     git -C "$ghostty_source" apply "$probe_dir/production-selection-probe.patch"
     probe_cflags=(-DGRAFTTY_SELECTION_RESIZE_PROBE=1)
 fi
+export ZIG_GLOBAL_CACHE_DIR="${ZIG_GLOBAL_CACHE_DIR:-$probe_build/zig-global}"
 common_args=(
     -Demit-exe=false -Demit-macos-app=false -Demit-xcframework=false
     -Demit-docs=false -Dsentry=false -Doptimize=ReleaseSafe
-    --global-cache-dir "${ZIG_GLOBAL_CACHE_DIR:-$probe_build/zig-global}"
 )
 build_library() {
     local variant=$1

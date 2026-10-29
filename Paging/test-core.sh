@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
-    echo "Usage: $0 <patched-ghostty-source> [zig-0.16.0-executable]" >&2
+    echo "Usage: $0 <patched-ghostty-source> [zig-0.17.0-executable]" >&2
     exit 2
 fi
 
@@ -10,8 +10,8 @@ probe_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ghostty_source=$(cd "$1" && pwd)
 zig_bin=$(command -v "${2:-zig}")
 zig_bin=$(cd "$(dirname "$zig_bin")" && pwd)/$(basename "$zig_bin")
-if [[ $("$zig_bin" version) != 0.16.0 ]]; then
-    echo "This experiment requires Zig 0.16.0." >&2
+if [[ $("$zig_bin" version) != 0.17.0 ]]; then
+    echo "This experiment requires Zig 0.17.0." >&2
     exit 2
 fi
 if [[ ! -f "$ghostty_source/include/ghostty/vt/snapshot.h" ]]; then
@@ -21,9 +21,9 @@ fi
 
 probe_build=$(mktemp -d "${TMPDIR:-/tmp}/graftty-paging-probe.XXXXXX")
 echo "Experiment artifacts: $probe_build"
+export ZIG_GLOBAL_CACHE_DIR="${ZIG_GLOBAL_CACHE_DIR:-$probe_build/zig-global}"
 build_args=(
     --cache-dir "$probe_build/zig-local"
-    --global-cache-dir "${ZIG_GLOBAL_CACHE_DIR:-$probe_build/zig-global}"
 )
 (
     cd "$ghostty_source"

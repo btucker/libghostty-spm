@@ -1,0 +1,261 @@
+diff --git a/pkg/macos/build.zig b/pkg/macos/build.zig
+index 6374055..f79c755 100644
+--- a/pkg/macos/build.zig
++++ b/pkg/macos/build.zig
+@@ -68,6 +68,8 @@ pub fn build(b: *std.Build) !void {
+     });
+ 
+     try translate_c.addImportToModule(b, "macos_c", module, .{
++        // iOS SDK headers contain C block types.
++        .extra_args = &.{"-fblocks"},
+         .source = .{ .includes = .{ .files = try includeFiles(
+             b,
+             if (target.result.os.tag == .macos) .macos else .all,
+diff --git a/src/Surface.zig b/src/Surface.zig
+index 998d459..a28ac56 100644
+--- a/src/Surface.zig
++++ b/src/Surface.zig
+@@ -687,7 +687,7 @@ pub fn init(
+                 };
+ 
+                 // Initialize our IO backend
+-                var io_exec = try termio.Exec.init(alloc, .{
++                const io_exec = try termio.Exec.init(alloc, .{
+                     .command = command,
+                     .env = env,
+                     .env_override = config.env,
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+index aafc06a..0baa9c9 100644
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -2030,7 +2030,7 @@ pub const CAPI = struct {
+         restored.setScrollbackMaxLines(limits.lines.explicit);
+         // Snapshot dynamic colors remain terminal state; their default values
+         // come from the local theme, including the local 256-color palette.
+-        restored.colors.palette.changeDefault(io.config.palette);
++        restored.colors.palette.changeDefault(alloc, io.config.palette) catch return false;
+         restored.colors.foreground.default = io.config.foreground.toTerminalRGB();
+         restored.colors.background.default = io.config.background.toTerminalRGB();
+         restored.colors.cursor.default = cursor: {
+@@ -2051,6 +2051,7 @@ pub const CAPI = struct {
+             .renderer_mailbox = io.renderer_mailbox,
+             .renderer_wakeup = io.renderer_wakeup,
+             .enquiry_response = old_handler.enquiry_response,
++            .xt_checksum_report = old_handler.xt_checksum_report,
+             .osc_color_report_format = old_handler.osc_color_report_format,
+             .clipboard_write = old_handler.clipboard_write,
+             .clipboard_write_limit = old_handler.clipboard_write_limit,
+@@ -2197,7 +2198,7 @@ pub const CAPI = struct {
+         if (len == 0 or len > bounded.max_page_bytes) return -1;
+         bounded.validatePage(ptr[0..len], attachment.cols) catch return -1;
+         var reader: std.Io.Reader = .fixed(ptr[0..len]);
+-        rows.* = terminal.snapshot.history.decodePage(&reader, core.io.alloc, screen) catch |err| switch (err) {
++        rows.* = terminal.snapshot.history.decodePage(&reader, terminal.snapshot.record.Header.decode(&reader) catch return -1, core.io.alloc, screen, .{}) catch |err| switch (err) {
+             error.MaxSizeExceeded, error.MaxLinesExceeded => return 3,
+             else => return -1,
+         };
+@@ -2219,7 +2220,7 @@ pub const CAPI = struct {
+         const attachment = surface.snapshot_attachment orelse return false;
+         if (generation != attachment.generation) return false;
+         const t = &core.io.terminal;
+-        if (@intFromEnum(t.screens.active_key) != screen_key) return false;
++        if (@backingInt(t.screens.active_key) != screen_key) return false;
+         const pages = &t.screens.active.pages;
+         return pages.scrollbar().offset <= threshold_rows;
+     }
+diff --git a/src/font/shaper/coretext.zig b/src/font/shaper/coretext.zig
+index 4678587..473fd2c 100644
+--- a/src/font/shaper/coretext.zig
++++ b/src/font/shaper/coretext.zig
+@@ -207,7 +207,7 @@ pub const Shaper = struct {
+         // and fall through to synchronous release in endFrame.
+         var cf_release_thread: ?*CFReleaseThread = null;
+         var cf_release_thr: ?std.Thread = null;
+-        if (comptime builtin.os.tag != .ios) {
++        if (comptime builtin.target.os.tag != .ios) {
+             const thr_obj = try alloc.create(CFReleaseThread);
+             errdefer alloc.destroy(thr_obj);
+             thr_obj.* = try .init(alloc);
+diff --git a/src/renderer/Metal.zig b/src/renderer/Metal.zig
+index a7c58b4..977b459 100644
+--- a/src/renderer/Metal.zig
++++ b/src/renderer/Metal.zig
+@@ -154,7 +154,7 @@ pub fn loopEnter(self: *Metal) void {
+ 
+     // iOS: sublayer bounds are already set before the callback is wired up,
+     // so no display message fires automatically. Kick the first frame.
+-    if (comptime builtin.os.tag == .ios) {
++    if (comptime builtin.target.os.tag == .ios) {
+         self.layer.layer.msgSend(void, objc.sel("setNeedsDisplay"), .{});
+     }
+ }
+@@ -243,7 +243,7 @@ pub fn initTarget(self: *const Metal, width: usize, height: usize) !Target {
+ pub inline fn present(self: *Metal, target: Target, sync: bool, sequence: usize) !void {
+     // iOS layer contents must be updated on main, including GPU completions
+     // from the render thread. Preserve the encoding order through that hop.
+-    if (comptime builtin.os.tag == .ios) {
++    if (comptime builtin.target.os.tag == .ios) {
+         try self.layer.setSurface(target.surface, sequence);
+         return;
+     }
+diff --git a/src/renderer/metal/IOSurfaceLayer.zig b/src/renderer/metal/IOSurfaceLayer.zig
+index 16d6ea9..a4d1ea4 100644
+--- a/src/renderer/metal/IOSurfaceLayer.zig
++++ b/src/renderer/metal/IOSurfaceLayer.zig
+@@ -101,7 +101,7 @@ export fn graftty_probe_layer_present(layer_ptr: objc.c.id, surface: *IOSurface)
+ ///
+ /// Does not ensure this happens on the main thread.
+ pub inline fn setSurfaceSync(self: *IOSurfaceLayer, surface: *IOSurface, sequence: usize) void {
+-    if (comptime builtin.os.tag == .ios) {
++    if (comptime builtin.target.os.tag == .ios) {
+         if (!acceptSequence(self.layer, sequence)) return;
+     }
+     self.layer.setProperty("contents", surface);
+@@ -136,12 +136,12 @@ fn setSurfaceCallback(
+     const dw: usize = if (width > sw) width - sw else sw - width;
+     const dh: usize = if (height > sh) height - sh else sh - height;
+     // iOS UIKit rounding can produce ±1px discrepancy; macOS must match exactly
+-    const max_drift: usize = if (comptime builtin.os.tag == .ios) 1 else 0;
++    const max_drift: usize = if (comptime builtin.target.os.tag == .ios) 1 else 0;
+     // Layout owns contentsScale. A completed old frame must not change it
+     // to make itself fit after a resize.
+     if (dw > max_drift or dh > max_drift) return;
+ 
+-    if (comptime builtin.os.tag == .ios) {
++    if (comptime builtin.target.os.tag == .ios) {
+         if (!acceptSequence(layer, block.sequence)) return;
+     }
+     layer.setProperty("contents", surface);
+@@ -178,7 +178,7 @@ pub fn setDisplayCallback(
+ fn getSubclass() error{ObjCFailed}!objc.Class {
+     if (Subclass) |c| return c;
+ 
+-    const parent_cls = if (comptime builtin.os.tag == .ios)
++    const parent_cls = if (comptime builtin.target.os.tag == .ios)
+         // CAIOSurfaceLayer provides native zero-copy IOSurface compositing
+         objc.getClass("CAIOSurfaceLayer") orelse
+             objc.getClass("CALayer") orelse return error.ObjCFailed
+diff --git a/src/terminal/PageList.zig b/src/terminal/PageList.zig
+index a4f240a..2a444e4 100644
+--- a/src/terminal/PageList.zig
++++ b/src/terminal/PageList.zig
+@@ -7999,7 +7999,7 @@ test "PageList PageAllocation finalizes pages and preserves live state" {
+     result.assertIntegrity();
+ }
+ 
+-test "PageList PageAllocation compresses prepended pages unless visible" {
++test "PageList PageAllocation compresses prepended pages and preserves viewport content" {
+     const testing = std.testing;
+ 
+     const Case = struct {
+@@ -8017,9 +8017,9 @@ test "PageList PageAllocation compresses prepended pages unless visible" {
+         // the new page.
+         .{ .viewport = .pin, .compressed = true },
+ 
+-        // The viewport follows the top of the scrollback, so the new page
+-        // becomes the first visible page.
+-        .{ .viewport = .top, .compressed = false },
++        // Graftty pins the existing top row before prepending older history.
++        // The new page remains above the viewport and can be compressed.
++        .{ .viewport = .top, .compressed = true },
+     };
+ 
+     for (cases) |case| {
+@@ -8040,6 +8040,7 @@ test "PageList PageAllocation compresses prepended pages unless visible" {
+             s.viewport,
+         );
+ 
++        const visible = s.getTopLeft(.viewport);
+         // A full-size page so compression is worthwhile.
+         const capacity = s.pages.first.?.capacity();
+         var allocation = try s.allocatePage(capacity);
+@@ -8050,6 +8051,7 @@ test "PageList PageAllocation compresses prepended pages unless visible" {
+         try allocation.finalize(.prepend, .{ .compress = true });
+ 
+         const node = s.pages.first.?;
++        try testing.expect(visible.eql(s.getTopLeft(.viewport)));
+         try testing.expectEqual(case.compressed, node.isCompressed());
+         try testing.expectEqual(
+             @as(usize, if (case.compressed) 1 else 0),
+@@ -20902,7 +20904,7 @@ test "PageList PageAllocation preserves top viewport content on prepend" {
+         var allocation = try result.allocatePage(.{ .cols = 4, .rows = 2 });
+         defer allocation.deinit();
+         allocation.page().size.rows = 2;
+-        try allocation.finalize(.prepend);
++        try allocation.finalize(.prepend, .{});
+         try testing.expect(visible.eql(result.getTopLeft(.viewport)));
+         try testing.expectEqual(@as(usize, (i + 1) * 2), result.scrollbar().offset);
+         result.assertIntegrity();
+diff --git a/src/terminal/snapshot/snapshot.zig b/src/terminal/snapshot/snapshot.zig
+index 24762c7..0885db3 100644
+--- a/src/terminal/snapshot/snapshot.zig
++++ b/src/terminal/snapshot/snapshot.zig
+@@ -662,7 +662,10 @@ pub const Decoder = struct {
+         alloc: Allocator,
+         t: *Terminal,
+     ) (NextError || error{HistoryRequiresRecovery})!?Progress {
+-        return self.nextImpl(alloc, t, true);
++        return self.nextImpl(alloc, t, true) catch |err| {
++            if (err != error.HistoryRequiresRecovery) self.state = .failed;
++            return err;
++        };
+     }
+ 
+     /// Decode one history PAGE record and prepend it to its screen in `t`,
+@@ -709,9 +712,12 @@ pub const Decoder = struct {
+         alloc: Allocator,
+         t: *Terminal,
+     ) NextError!?Progress {
+-        return self.nextImpl(alloc, t, false) catch |err| switch (err) {
+-            error.HistoryRequiresRecovery => unreachable,
+-            else => |other| return other,
++        return self.nextImpl(alloc, t, false) catch |err| {
++            self.state = .failed;
++            return switch (err) {
++                error.HistoryRequiresRecovery => unreachable,
++                else => |other| other,
++            };
+         };
+     }
+ 
+@@ -729,9 +735,6 @@ pub const Decoder = struct {
+             .finished => return null,
+             .history => {},
+         }
+-        errdefer |err| {
+-            if (err != error.HistoryRequiresRecovery) self.state = .failed;
+-        }
+         const state = &self.state.history;
+ 
+         while (true) {
+diff --git a/src/termio/stream_handler.zig b/src/termio/stream_handler.zig
+index 8c4cb1e..b0082f1 100644
+--- a/src/termio/stream_handler.zig
++++ b/src/termio/stream_handler.zig
+@@ -884,7 +884,7 @@ pub const StreamHandler = struct {
+                 const pos = self.cursorReportPos();
+ 
+                 var msg: termio.Message = .{ .write_small = .{} };
+-                const resp = try std.fmt.bufPrint(&msg.write_small.data, "\x1B[?{};{};1R", .{
++                const resp = try std.mem.print(&msg.write_small.data, "\x1B[?{};{};1R", .{
+                     pos.y + 1,
+                     pos.x + 1,
+                 });
+@@ -1511,7 +1511,7 @@ pub const StreamHandler = struct {
+     /// Decode an OSC 7 value using the native surface's scheme and local-host rules.
+     /// Returned bytes borrow from url or alloc; the caller owns their lifetime.
+     pub fn pwdPath(alloc: Allocator, url: []const u8) !?[]const u8 {
+-        if (builtin.os.tag == .windows) {
++        if (builtin.target.os.tag == .windows) {
+             log.warn("reportPwd unimplemented on windows", .{});
+             return null;
+         }
+@@ -1520,7 +1520,7 @@ pub const StreamHandler = struct {
+         // for this OSC 7 context (e.g. kitty-shell-cwd expects the full,
+         // unencoded path).
+         const uri: std.Uri = internal_os.uri.parse(url, .{
+-            .mac_address = comptime builtin.os.tag != .macos,
++            .mac_address = comptime builtin.target.os.tag != .macos,
+             .raw_path = std.mem.startsWith(u8, url, "kitty-shell-cwd://"),
+         }) catch |e| {
+             log.warn("invalid url in OSC 7: {}", .{e});
