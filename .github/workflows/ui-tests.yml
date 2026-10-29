@@ -48,41 +48,6 @@ jobs:
           path: ${{ runner.temp }}/libghostty-ui-${{ matrix.slug }}-*.xcresult
           retention-days: 7
 
-  mac-catalyst:
-    name: Mac Catalyst UI Tests
-    runs-on: macos-26
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-
-      - name: Xcode Version
-        run: xcodebuild -version
-
-      - name: Run Mac Catalyst UI Tests
-        run: |
-          set -euo pipefail
-          rm -rf "$RUNNER_TEMP/libghostty-ui-maccatalyst.xcresult"
-          xcodebuild test \
-            -project Example/MobileGhosttyApp.xcodeproj \
-            -scheme MobileGhosttyApp \
-            -destination 'platform=macOS,variant=Mac Catalyst' \
-            -resultBundlePath "$RUNNER_TEMP/libghostty-ui-maccatalyst.xcresult" \
-            MACOSX_DEPLOYMENT_TARGET=15.0 \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY=""
-
-      - name: Upload Mac Catalyst Result Bundle
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: libghostty-ui-maccatalyst-xcresult
-          path: ${{ runner.temp }}/libghostty-ui-maccatalyst.xcresult
-          retention-days: 7
-
   macos-appkit:
     name: macOS AppKit UI Tests
     runs-on: macos-26

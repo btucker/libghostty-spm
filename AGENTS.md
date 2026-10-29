@@ -1,3 +1,13 @@
+# Production fork
+
+This fork now assembles the pinned Graftty paging renderer. Follow
+[Paging/README.md](Paging/README.md) for current build and release commands.
+The production matrix is universal macOS, arm64 iOS, and universal iOS Simulator.
+The historical upstream notes below describe Catalyst, visionOS and automatic
+weekly upgrades; those are not supported by this production package. The native
+patch inventory is `Paging/recipe.json`; `Patches/ghostty` is historical and is
+not applied. Keep engine upgrades separate from packaging work.
+
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.

@@ -125,3 +125,5 @@ for library in libraries:
 
 print(f"[*] verified static-library xcframework layout and architectures: {xcframework}")
 PY
+
+python3 Paging/verify-api.py "$XCFRAMEWORK_PATH"

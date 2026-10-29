@@ -74,18 +74,6 @@ jobs:
             cpu: apple_a17
           - target: x86_64-ios-simulator
             variant: iphonesimulator
-          - target: aarch64-maccatalyst
-            variant: maccatalyst
-            cpu: apple_a17
-          - target: x86_64-maccatalyst
-            variant: maccatalyst
-          - target: aarch64-visionos
-            variant: xros
-          - target: aarch64-visionos-simulator
-            variant: xrsimulator
-            cpu: apple_a17
-          - target: x86_64-visionos-simulator
-            variant: xrsimulator
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -187,8 +175,27 @@ jobs:
             "$PWD/BinaryTarget/GhosttyKit.xcframework" \
             "$PWD/build/GhosttyKit.xcframework.zip"
 
+      - name: Record Paging Provenance
+        run: |
+          python3 Paging/provenance.py write --source "${{ github.sha }}"
+          python3 Paging/provenance.py verify
+          (cd build; shasum -a 256 GhosttyKit.xcframework.zip) > SHA256SUMS
+          shasum -a 256 PAGING-BUILD.json >> SHA256SUMS
+
       - name: Test XCFramework Consumer
         run: ./Script/test-xcframework-consumer.sh "$PWD/BinaryTarget/GhosttyKit.xcframework"
+
+      - name: Setup Zig for Paging Probes
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Test Packaged Paging on Mac and iOS Simulator
+        run: |
+          git clone https://github.com/ghostty-org/ghostty References/ghostty-upstream
+          git -C References/ghostty-upstream checkout "$(cat Ghostty.ref)"
+          Script/apply-patches.sh "$PWD/References/ghostty-upstream"
+          Paging/test-published.sh "$PWD/References/ghostty-upstream" "$(command -v zig)"
 
       - name: Stage Asset
         run: mv ./build/GhosttyKit.xcframework.zip ./GhosttyKit.xcframework.zip
@@ -202,8 +209,10 @@ jobs:
             GhosttyKit XCFramework
 
             Ghostty commit: https://github.com/ghostty-org/ghostty/commit/${{ needs.prepare.outputs.ghostty_ref }}
-            Slices: macOS, iOS, iOS Simulator, Mac Catalyst, visionOS, visionOS Simulator
+            Slices: universal macOS, arm64 iOS, universal iOS Simulator
           draft: false
           prerelease: false
           files: |
             GhosttyKit.xcframework.zip
+            PAGING-BUILD.json
+            SHA256SUMS

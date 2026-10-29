@@ -113,10 +113,13 @@ jobs:
       - name: Download XCFramework
         run: |
           gh release download "${{ steps.release.outputs.storage_tag }}" \
-            --pattern GhosttyKit.xcframework.zip \
+            --pattern GhosttyKit.xcframework.zip --pattern PAGING-BUILD.json --pattern SHA256SUMS \
             --dir ./build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify Download Checksums
+        run: cd build && shasum -a 256 --check SHA256SUMS
 
       - name: Generate Manifest
         run: |
@@ -129,6 +132,13 @@ jobs:
           mkdir -p BinaryTarget
           ditto -x -k ./build/GhosttyKit.xcframework.zip BinaryTarget/
           test -d BinaryTarget/GhosttyKit.xcframework
+
+      - name: Verify Paging Provenance
+        run: |
+          cp build/PAGING-BUILD.json PAGING-BUILD.json
+          python3 Paging/provenance.py refresh-wrapper --source "${{ github.sha }}"
+          python3 Paging/provenance.py verify
+          cp PAGING-BUILD.json /tmp/PAGING.release.json
 
       - name: Test XCFramework Consumer
         run: ./Script/test-xcframework-consumer.sh "$PWD/BinaryTarget/GhosttyKit.xcframework"
@@ -147,12 +157,13 @@ jobs:
           git clean -fdx
           git reset --hard
           cp /tmp/Package.release.swift Package.swift
+          cp /tmp/PAGING.release.json PAGING-BUILD.json
 
       - name: Commit & Push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Package.swift
+          git add Package.swift PAGING-BUILD.json
           git commit -m "release: ${{ steps.release.outputs.package_version }}" || echo "No changes to commit"
           git push
 

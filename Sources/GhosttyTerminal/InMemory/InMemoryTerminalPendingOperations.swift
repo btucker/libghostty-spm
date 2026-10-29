@@ -9,6 +9,7 @@ import Foundation
 struct InMemoryTerminalPendingOperations {
     enum Operation {
         case write(Data)
+        case custom((@Sendable () -> Void)?)
         case processExit(exitCode: UInt32, runtimeMilliseconds: UInt64)
     }
 
@@ -81,6 +82,15 @@ struct InMemoryTerminalPendingOperations {
         }
         compact()
         return nil
+    }
+
+    /// Release old-generation snapshot closures without disturbing live
+    /// output order or the sequence numbers used by output barriers.
+    mutating func discardCustomOperations() {
+        for index in head..<storage.count {
+            guard case .custom? = storage[index]?.operation else { continue }
+            storage[index]?.operation = .custom(nil)
+        }
     }
 
     /// Drops the oldest queued bytes past `limit`; process exits are kept.

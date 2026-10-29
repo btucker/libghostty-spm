@@ -53,3 +53,6 @@ Temporary Items
 /References
 /references
 Script/support/__pycache__
+
+/build
+Paging/__pycache__/

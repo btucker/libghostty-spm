@@ -31,6 +31,12 @@ jobs:
       - name: Swift Version
         run: swift --version
 
+      - name: Test Paging Provenance
+        run: |
+          python3 Paging/test-provenance.py
+          python3 Paging/test-patches.py
+          python3 Paging/test-packaging.py
+
       - name: Check Licenses
         run: ./Script/check-licenses.sh
 

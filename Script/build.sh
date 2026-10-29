@@ -17,7 +17,7 @@ Options:
   --source <path>          Use an existing Ghostty checkout.
   --ref <tag-or-commit>    Checkout the given ref in the source checkout.
   --platforms <csv>        Build platform groups. Default:
-                           macos,ios,maccatalyst,visionos
+                           macos,ios
   --download-url <url>     Generate Package.swift from Package.swift.template.
   --skip-tests             Skip local xcodebuild and swift test verification.
   -h, --help               Show this help.
@@ -26,16 +26,15 @@ Notes:
   - Default source path is ./References/ghostty-upstream
   - This builds real per-target static archives, then assembles
     BinaryTarget/GhosttyKit.xcframework and build/GhosttyKit.xcframework.zip
-  - Upstream Ghostty patches from ./Patches/ghostty are applied automatically
-  - Current verified groups: macos, ios, maccatalyst, visionos
-    (visionos builds against a patched copy of the Zig std, see Patches/zig)
-  - Current upstream Ghostty crashes for: tvos, watchos
+  - The pinned production patches from ./Paging are applied automatically
+  - Current verified groups: macos, ios
+  - Other Apple platform groups are not part of this production package.
 EOF
 }
 
 ROOT_DIR=$(pwd)
 SOURCE_DIR="$ROOT_DIR/References/ghostty-upstream"
-PLATFORMS="macos,ios,maccatalyst,visionos"
+PLATFORMS="macos,ios"
 DOWNLOAD_URL=${DOWNLOAD_URL:-}
 GHOSTTY_REF=
 SKIP_TESTS=0
@@ -125,6 +124,9 @@ done
 if [ -n "$DOWNLOAD_URL" ]; then
     ./Script/build-manifest.sh "$XCFRAMEWORK_ZIP" "$DOWNLOAD_URL"
 fi
+
+python3 Paging/provenance.py write --source "$(git rev-parse HEAD)"
+python3 Paging/provenance.py verify
 
 if [ "$SKIP_TESTS" -eq 0 ]; then
     saved_manifest=$(mktemp)
