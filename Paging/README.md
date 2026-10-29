@@ -25,7 +25,9 @@ A changed patch recipe requires a fresh source checkout. Do not reuse a source
 checkout concurrently. The build writes `BinaryTarget/GhosttyKit.xcframework`,
 `build/GhosttyKit.xcframework.zip`, and `PAGING-BUILD.json`.
 The receipt hashes the exact recipe, patches, Swift sources, and every artifact
-file. Run `python3 Paging/provenance.py verify` to validate a local package.
+file. Each native slice records its actual compiler checksum, Xcode and SDK builds,
+archive hash, and header hash; the assembly toolchain is recorded separately.
+ZIP entries use fixed timestamps, modes, and ordering for reproducible packaging. Run `python3 Paging/provenance.py verify` to validate a local package.
 After rebuilding Swift wrappers against an unchanged binary, explicitly refresh
 its receipt with `python3 Paging/provenance.py refresh-wrapper --source "$(git rev-parse HEAD)"`.
 Do not refresh a receipt for native changes without rebuilding the binary.

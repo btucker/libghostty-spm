@@ -22,7 +22,7 @@ def inputs(root):
                                      'Script/support/libcxx-verbose-abort-compat.c',
                                      'Script/build.sh', 'Script/build-platform.sh', 'Script/merge-xcframework.sh',
                                      'Script/verify-xcframework.sh', 'Paging/pack-xcframework.py',
-                                     'Paging/provenance.py', 'Paging/verify-api.py') if (root / name).exists()]
+                                     'Paging/provenance.py', 'Paging/verify-api.py', 'Paging/toolchain.py') if (root / name).exists()]
     return {str(path.relative_to(root)): sha(path) for path in paths}
 
 
@@ -36,13 +36,13 @@ def artifacts(binary):
             for path in sorted(binary.rglob('*')) if path.is_file()}
 
 
-def write(root, binary, source, arm64_only, toolchain=None):
+def write(root, binary, source, arm64_only, toolchain=None, native_toolchains=None):
     recipe = json.loads((root / 'Paging/recipe.json').read_text())
     receipt = dict(schemaVersion=1, snapshotABI=recipe['snapshotABI'],
                    renderer=recipe['renderer'], wrapper=recipe['wrapper'], zig=recipe['zig'],
                    sourceCommit=source, wrapperSourceCommit=source, arm64Only=arm64_only,
                    inputs=inputs(root), wrapperInputs=wrapper_inputs(root), artifacts=artifacts(binary),
-                   toolchain=toolchain or {})
+                   packagingToolchain=toolchain or {}, nativeToolchains=native_toolchains or {})
     (root / 'PAGING-BUILD.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
     return receipt
 
@@ -71,28 +71,43 @@ def refresh_wrapper(root, binary, source):
     (root / 'PAGING-BUILD.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
 
 
+def native_toolchains(directory, recipe):
+    records = {}
+    for path in sorted(directory.rglob('toolchain.json')):
+        record = json.loads(path.read_text())
+        target = record['target']
+        if target in records or record['zig'] != recipe['zig']:
+            raise ValueError('duplicate target or incorrect native compiler')
+        if record['archiveSHA256'] != sha(path.parent / 'lib/libghostty.a'):
+            raise ValueError('native archive changed after recording its toolchain')
+        if record['headerSHA256'] != sha(path.parent / 'include/libghostty/ghostty.h'):
+            raise ValueError('native header changed after recording its toolchain')
+        records[target] = record
+    expected = {'aarch64-macos', 'x86_64-macos', 'aarch64-ios',
+                'aarch64-ios-simulator', 'x86_64-ios-simulator'}
+    if set(records) != expected:
+        raise ValueError('missing native toolchain records')
+    return records
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation', choices=['write', 'verify', 'refresh-wrapper'])
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--binary', type=Path)
     parser.add_argument('--source', default='local')
+    parser.add_argument('--toolchains-dir', type=Path)
     parser.add_argument('--arm64-only', action='store_true')
     args = parser.parse_args()
     binary = args.binary or args.root / 'BinaryTarget/GhosttyKit.xcframework'
     if args.operation == 'write':
-        import shutil
-        import subprocess
-        def output(*command):
-            return subprocess.check_output(command, text=True).strip()
-        compiler = Path(shutil.which('zig')).resolve()
-        toolchain = dict(zig=output(str(compiler), 'version'), zigSHA256=sha(compiler),
-                         xcode=output('xcodebuild', '-version'),
-                         sdkBuilds={sdk: output('xcrun', '--sdk', sdk, '--show-sdk-build-version')
-                                    for sdk in ('macosx', 'iphoneos', 'iphonesimulator')})
-        if toolchain['zig'] != json.loads((args.root / 'Paging/recipe.json').read_text())['zig']:
+        from toolchain import capture
+        toolchain = capture()
+        recipe = json.loads((args.root / 'Paging/recipe.json').read_text())
+        records = native_toolchains(args.toolchains_dir, recipe) if args.toolchains_dir else {}
+        if toolchain['zig'] != recipe['zig']:
             raise ValueError('receipt compiler does not match the pinned Zig version')
-        write(args.root, binary, args.source, args.arm64_only, toolchain)
+        write(args.root, binary, args.source, args.arm64_only, toolchain, records)
     elif args.operation == 'refresh-wrapper':
         refresh_wrapper(args.root, binary, args.source)
     else:

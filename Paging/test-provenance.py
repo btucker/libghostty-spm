@@ -60,6 +60,30 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(current['wrapperSourceCommit'], 'updated-wrapper')
         self.assertEqual(current['artifacts'], previous['artifacts'])
 
+    def test_native_toolchains_are_bound_to_every_slice(self):
+        recipe = json.loads((self.root / 'Paging/recipe.json').read_text())
+        targets = ['aarch64-macos', 'x86_64-macos', 'aarch64-ios',
+                   'aarch64-ios-simulator', 'x86_64-ios-simulator']
+        directory = self.root / 'targets'
+        for target in targets:
+            root = directory / target
+            (root / 'lib').mkdir(parents=True)
+            (root / 'include/libghostty').mkdir(parents=True)
+            archive = root / 'lib/libghostty.a'
+            header = root / 'include/libghostty/ghostty.h'
+            archive.write_bytes(target.encode())
+            header.write_bytes(b'header')
+            record = dict(target=target, zig=recipe['zig'],
+                          archiveSHA256=self.module.sha(archive), headerSHA256=self.module.sha(header))
+            (root / 'toolchain.json').write_text(json.dumps(record))
+        self.assertEqual(set(self.module.native_toolchains(directory, recipe)), set(targets))
+        archive.write_bytes(b'changed after compilation')
+        with self.assertRaises(ValueError):
+            self.module.native_toolchains(directory, recipe)
+        (root / 'toolchain.json').unlink()
+        with self.assertRaises(ValueError):
+            self.module.native_toolchains(directory, recipe)
+
     def test_wrong_abi_is_rejected(self):
         path = self.root / 'PAGING-BUILD.json'
         receipt = json.loads(path.read_text())

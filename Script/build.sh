@@ -125,7 +125,7 @@ if [ -n "$DOWNLOAD_URL" ]; then
     ./Script/build-manifest.sh "$XCFRAMEWORK_ZIP" "$DOWNLOAD_URL"
 fi
 
-python3 Paging/provenance.py write --source "$(git rev-parse HEAD)"
+python3 Paging/provenance.py write --source "$(git rev-parse HEAD)" --toolchains-dir "$ARTIFACTS_DIR/.intermediates"
 python3 Paging/provenance.py verify
 
 if [ "$SKIP_TESTS" -eq 0 ]; then

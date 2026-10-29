@@ -12,7 +12,7 @@ fi
 PACKAGE_TAG=${1:-}
 STORAGE_TAG=${2:-}
 ASSET_NAME=${3:-GhosttyKit.xcframework.zip}
-REPO=${GITHUB_REPOSITORY:-Lakr233/libghostty-spm}
+REPO=${GITHUB_REPOSITORY:-btucker/libghostty-spm}
 
 if [ -z "$PACKAGE_TAG" ] || [ -z "$STORAGE_TAG" ]; then
     echo "Usage: $0 <package_tag> <storage_tag> [asset_name]"

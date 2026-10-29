@@ -101,6 +101,9 @@ jobs:
             "${{ matrix.target }}" \
             "$PWD/build/out"
 
+      - name: Record Native Toolchain
+        run: python3 Paging/toolchain.py "${{ matrix.target }}" "$PWD/build/out"
+
       - name: Pack Artifact
         run: tar -czf "target--${{ matrix.variant }}--${{ matrix.target }}.tar.gz" -C ./build/out .
 
@@ -185,7 +188,7 @@ jobs:
 
       - name: Record Paging Provenance
         run: |
-          python3 Paging/provenance.py write --source "${{ github.sha }}"
+          python3 Paging/provenance.py write --source "${{ github.sha }}" --toolchains-dir build/targets
           python3 Paging/provenance.py verify
           (cd build; shasum -a 256 GhosttyKit.xcframework.zip) > SHA256SUMS
           shasum -a 256 PAGING-BUILD.json >> SHA256SUMS
@@ -208,7 +211,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.prepare.outputs.storage_tag }}
-          target_commitish: ${{ github.ref_name }}
+          target_commitish: ${{ github.sha }}
           body: |
             GhosttyKit XCFramework
 

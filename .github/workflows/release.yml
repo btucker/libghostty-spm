@@ -160,18 +160,20 @@ jobs:
           cp /tmp/PAGING.release.json PAGING-BUILD.json
 
       - name: Commit & Push
+        id: commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Package.swift PAGING-BUILD.json
           git commit -m "release: ${{ steps.release.outputs.package_version }}" || echo "No changes to commit"
           git push
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.release.outputs.package_version }}
-          target_commitish: ${{ github.ref_name }}
+          target_commitish: ${{ steps.commit.outputs.sha }}
           body: |
             GhosttyKit ${{ steps.release.outputs.package_version }}
 
