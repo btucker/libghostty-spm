@@ -10,9 +10,15 @@ name: Build Upstream XCFramework
 
 on:
   workflow_dispatch:
+    inputs:
+      native_run_id:
+        description: Reuse native slices from a completed build.yml run with identical native inputs.
+        required: false
+        type: string
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: build-upstream
@@ -25,6 +31,8 @@ jobs:
       build_needed: ${{ steps.release.outputs.build_needed }}
       ghostty_ref: ${{ steps.release.outputs.ghostty_ref }}
       storage_tag: ${{ steps.release.outputs.storage_tag }}
+      native_source: ${{ steps.release.outputs.native_source }}
+      native_run_id: ${{ steps.release.outputs.native_run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -47,16 +55,28 @@ jobs:
             exit 0
           fi
 
+          NATIVE_SOURCE="$GITHUB_SHA"
+          if [[ -n "$NATIVE_RUN_ID" ]]; then
+            [[ "$NATIVE_RUN_ID" =~ ^[0-9]+$ ]] || exit 1
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$NATIVE_RUN_ID" > /tmp/native-run.json
+            NATIVE_SOURCE=$(python3 -c 'import json,os; r=json.load(open("/tmp/native-run.json")); assert r["repository"]["full_name"]==os.environ["GITHUB_REPOSITORY"] and r["path"]==".github/workflows/build.yml" and r["status"]=="completed"; print(r["head_sha"])')
+            python3 Paging/verify-reuse.py "$NATIVE_SOURCE"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$NATIVE_RUN_ID/jobs?per_page=100" > /tmp/native-jobs.json
+            python3 -c 'import json; jobs=[j for j in json.load(open("/tmp/native-jobs.json"))["jobs"] if j["name"].startswith("build-target (")]; assert len(jobs)==5 and all(j["conclusion"]=="success" for j in jobs)'
+          fi
+          echo "native_source=$NATIVE_SOURCE" >> "$GITHUB_OUTPUT"
+          echo "native_run_id=$NATIVE_RUN_ID" >> "$GITHUB_OUTPUT"
           echo "[*] building $GHOSTTY_REF -> $STORAGE_TAG"
           echo "build_needed=true" >> "$GITHUB_OUTPUT"
           echo "ghostty_ref=$GHOSTTY_REF" >> "$GITHUB_OUTPUT"
           echo "storage_tag=$STORAGE_TAG" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NATIVE_RUN_ID: ${{ inputs.native_run_id }}
 
   build-target:
     needs: prepare
-    if: needs.prepare.outputs.build_needed == 'true'
+    if: needs.prepare.outputs.build_needed == 'true' && needs.prepare.outputs.native_run_id == ''
     runs-on: macos-15
     timeout-minutes: 60
     strategy:
@@ -117,7 +137,7 @@ jobs:
 
   merge-release:
     needs: [prepare, build-target]
-    if: needs.prepare.outputs.build_needed == 'true'
+    if: always() && needs.prepare.outputs.build_needed == 'true' && (needs.build-target.result == 'success' || needs.prepare.outputs.native_run_id != '')
     runs-on: macos-26
     timeout-minutes: 60
     steps:
@@ -136,6 +156,8 @@ jobs:
           pattern: target-*
           path: ./build/tarballs
           merge-multiple: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ needs.prepare.outputs.native_run_id || github.run_id }}
 
       - name: Assemble Variants
         run: |
@@ -188,7 +210,8 @@ jobs:
 
       - name: Record Paging Provenance
         run: |
-          python3 Paging/provenance.py write --source "${{ github.sha }}" --toolchains-dir build/targets
+          python3 Paging/provenance.py write --source "${{ needs.prepare.outputs.native_source }}" --toolchains-dir build/targets
+          python3 Paging/provenance.py refresh-wrapper --source "${{ github.sha }}"
           python3 Paging/provenance.py verify
           (cd build; shasum -a 256 GhosttyKit.xcframework.zip) > SHA256SUMS
           shasum -a 256 PAGING-BUILD.json >> SHA256SUMS

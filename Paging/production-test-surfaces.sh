@@ -107,4 +107,4 @@ xcrun simctl install "$3" "$probe_app"
 xcrun simctl launch --console "$3" dev.graftty.snapshot-probe | tee "$probe_build/ios.log"
 # simctl can return success even when the launched app asserts. Require the
 # final scenario's marker, which is emitted only after all assertions pass.
-rg -q '^UIKit snapshot surface: scenario=9 pages=0 READY/live/draw/destroy PASS' "$probe_build/ios.log"
+grep -q '^UIKit snapshot surface: scenario=9 pages=0 READY/live/draw/destroy PASS' "$probe_build/ios.log"

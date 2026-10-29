@@ -38,7 +38,9 @@ Publication uses the existing two-stage release route:
 
 1. Dispatch `build.yml` on the reviewed branch. It builds all five slices and
    publishes the immutable `upstream.<Ghostty.ref prefix>-<Ghostty.build>` storage
-   release, with the XCFramework, receipt, and SHA256SUMS.
+   release, with the XCFramework, receipt, and SHA256SUMS. For a probe-only retry,
+   `native_run_id` may reuse all five successful native jobs from a completed run.
+   The workflow verifies that every native source input is unchanged before reuse.
 2. Dispatch `release.yml` on the same branch. It downloads and verifies the
    storage receipt, generates the remote manifest with the ZIP checksum, builds
    the supported destinations, and runs the Swift tests. It commits the manifest
