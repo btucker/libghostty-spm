@@ -109,9 +109,11 @@ jobs:
           fi
 
           echo "[*] package_version=$PACKAGE_VERSION storage_tag=$STORAGE_TAG"
-          echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
-          echo "ghostty_ref=$GHOSTTY_REF" >> "$GITHUB_OUTPUT"
-          echo "storage_tag=$STORAGE_TAG" >> "$GITHUB_OUTPUT"
+          {
+            echo "package_version=$PACKAGE_VERSION"
+            echo "ghostty_ref=$GHOSTTY_REF"
+            echo "storage_tag=$STORAGE_TAG"
+          } >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

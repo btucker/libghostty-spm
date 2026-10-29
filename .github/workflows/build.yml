@@ -69,12 +69,14 @@ jobs:
             gh api "repos/$GITHUB_REPOSITORY/actions/runs/$NATIVE_RUN_ID/jobs?per_page=100" > /tmp/native-jobs.json
             python3 -c 'import json; jobs=[j for j in json.load(open("/tmp/native-jobs.json"))["jobs"] if j["name"].startswith("build-target (")]; assert len(jobs)==5 and all(j["conclusion"]=="success" for j in jobs)'
           fi
-          echo "native_source=$NATIVE_SOURCE" >> "$GITHUB_OUTPUT"
-          echo "native_run_id=$NATIVE_RUN_ID" >> "$GITHUB_OUTPUT"
           echo "[*] building $GHOSTTY_REF -> $STORAGE_TAG"
-          echo "build_needed=true" >> "$GITHUB_OUTPUT"
-          echo "ghostty_ref=$GHOSTTY_REF" >> "$GITHUB_OUTPUT"
-          echo "storage_tag=$STORAGE_TAG" >> "$GITHUB_OUTPUT"
+          {
+            echo "native_source=$NATIVE_SOURCE"
+            echo "native_run_id=$NATIVE_RUN_ID"
+            echo "build_needed=true"
+            echo "ghostty_ref=$GHOSTTY_REF"
+            echo "storage_tag=$STORAGE_TAG"
+          } >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NATIVE_RUN_ID: ${{ inputs.native_run_id }}

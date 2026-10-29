@@ -15,6 +15,7 @@ import tempfile
 
 REPOSITORY = 'btucker/libghostty-spm'
 ASSET = 'GhosttyKit.xcframework.zip'
+STORAGE_TAG = r'upstream\.[0-9a-f]{12}(?:-[0-9]+)?'
 
 
 def gh(*arguments):
@@ -34,7 +35,7 @@ def validate_handoff(run, metadata):
             or metadata.get('workflowCommit') != run.get('head_sha')
             or not re.fullmatch('[0-9a-f]{40}', metadata.get('commit', ''))):
         raise ValueError('Handoff must belong to a successful matching publication workflow')
-    pattern = r'upstream\.[0-9a-f]{12}-[0-9]+' if kind == 'native' else r'[0-9]+\.[0-9]+\.[0-9]+'
+    pattern = STORAGE_TAG if kind == 'native' else r'[0-9]+\.[0-9]+\.[0-9]+'
     if not re.fullmatch(pattern, metadata.get('tag', '')):
         raise ValueError('Invalid release tag')
     if kind == 'native' and metadata['commit'] != run['head_sha']:
@@ -57,7 +58,7 @@ def verify_checksums(root):
 
 
 def manifest_binding(manifest):
-    url = re.search(r'url:\s*"https://github.com/btucker/libghostty-spm/releases/download/(upstream\.[0-9a-f]{12}-[0-9]+)/GhosttyKit\.xcframework\.zip"', manifest)
+    url = re.search(r'url:\s*"https://github.com/btucker/libghostty-spm/releases/download/(' + STORAGE_TAG + r')/GhosttyKit\.xcframework\.zip"', manifest)
     checksum = re.search(r'checksum:\s*"([0-9a-f]{64})"', manifest)
     if not url or not checksum:
         raise ValueError('Manifest must pin a checksummed fork storage asset')
@@ -67,6 +68,26 @@ def manifest_binding(manifest):
 def tracked_file(commit, name):
     response = api(f'contents/{name}?ref={commit}')
     return base64.b64decode(response['content'])
+
+
+def ensure_tag(tag, commit):
+    references = api(f'git/matching-refs/tags/{tag}')
+    reference = next((ref for ref in references if ref['ref'] == f'refs/tags/{tag}'), None)
+    if reference is not None:
+        target = reference['object']
+        seen = set()
+        while target['type'] == 'tag':
+            if target['sha'] in seen:
+                raise ValueError('Cyclic tag reference')
+            seen.add(target['sha'])
+            target = api(f'git/tags/{target["sha"]}')['object']
+        if target['type'] != 'commit' or target['sha'] != commit:
+            raise ValueError('Existing tag does not match the tested commit')
+    else:
+        # GitHub creates a missing ref atomically; a competing creation fails
+        # instead of letting release creation silently use another commit.
+        gh('api', '--method', 'POST', f'repos/{REPOSITORY}/git/refs',
+           '--raw-field', f'ref=refs/tags/{tag}', '--raw-field', f'sha={commit}')
 
 
 def main():
@@ -108,12 +129,13 @@ def main():
             notes = f'GhosttyKit {tag}\n\nValidated workflow: {run["html_url"]}\n\nNative artifacts: https://github.com/{REPOSITORY}/releases/tag/{storage}\n\nExact package commit: {commit}'
         notes_path = root/'notes.md'
         notes_path.write_text(notes + '\n')
-        gh('release', 'create', tag, '-R', REPOSITORY, '--target', commit,
+        ensure_tag(tag, commit)
+        gh('release', 'create', tag, '-R', REPOSITORY, '--verify-tag',
            '--title', tag, '--notes-file', str(notes_path), *assets)
         release = api(f'releases/tags/{tag}')
-        reference = api(f'git/ref/tags/{tag}')
-        if reference['object']['sha'] != commit:
-            raise ValueError('Published tag does not match the tested commit')
+        ensure_tag(tag, commit)
+        if assets and {asset['name'] for asset in release['assets']} != {ASSET, 'PAGING-BUILD.json', 'SHA256SUMS'}:
+            raise ValueError('Published native asset inventory mismatch')
         for asset in release['assets']:
             if assets and asset['name'] in (ASSET, 'PAGING-BUILD.json', 'SHA256SUMS'):
                 checksum = hashlib.sha256((root/asset['name']).read_bytes()).hexdigest()
