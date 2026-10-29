@@ -129,7 +129,7 @@ struct InMemoryTerminalSnapshotQueueTests {
         #expect(result == nil)
     }
 
-    @Test
+    @Test @MainActor
     func `queued history rejects a replaced surface and releases its continuation`() async {
         let started = DispatchSemaphore(value: 0)
         let finish = DispatchSemaphore(value: 0)
@@ -145,13 +145,14 @@ struct InMemoryTerminalSnapshotQueueTests {
                 Issue.record("History must not reach a replacement surface")
                 return 1
             }, completion: { continuation.resume(returning: $0) })
-            DispatchQueue.global().async {
-                access.setSurface(nil)
-            }
-            let deadline = ProcessInfo.processInfo.systemUptime + 2
-            while access.currentSurface != nil && ProcessInfo.processInfo.systemUptime < deadline {}
-            #expect(access.currentSurface == nil)
-            finish.signal()
+            access.setSurface(nil, whileWaiting: {
+                // Retirement publishes nil before asking the host to drain
+                // the blocked writer. Do not spin while a global queue waits
+                // for CPU to begin replacement.
+                #expect(access.currentSurface == nil)
+                finish.signal()
+            })
+            access.setSurface(UnsafeMutableRawPointer(bitPattern: 5)!)
         }
         #expect(result == nil)
         await drainSnapshotQueue(access)

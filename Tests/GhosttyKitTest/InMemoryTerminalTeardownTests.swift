@@ -40,14 +40,14 @@ struct InMemoryTerminalTeardownTests {
             events.append("watchdog rescue")
             for _ in 0..<128 { mailboxSpace.signal() }
         }
-        let start = ProcessInfo.processInfo.systemUptime
         session.clearSurface(ifMatches: surface, whileWaiting: {
             #expect(session.currentSurface == nil)
             mailboxSpace.signal()
         })
         events.append("free")
-        #expect(ProcessInfo.processInfo.systemUptime - start < 0.5)
         #expect(!session.waitForPendingOutput())
+        // The exact sequence also proves the watchdog did not rescue a
+        // blocked implementation, without a scheduler-dependent time bound.
         #expect(events.values == ["active", "writer finished", "free"])
         session.setSurface(UnsafeMutableRawPointer(bitPattern: 2)!)
         #expect(session.waitForPendingOutput())
