@@ -13,7 +13,7 @@ if [[ $("$zig_bin" version) != 0.16.0 ]]; then
     echo "This test requires Zig 0.16.0." >&2
     exit 2
 fi
-xcrun metal --version
+xcrun --sdk macosx metal --version
 
 probe_build=$(mktemp -d "${TMPDIR:-/tmp}/graftty-surface-probe.XXXXXX")
 echo "Native paging test artifacts: $probe_build"
@@ -74,7 +74,7 @@ frameworks=(
     -framework CoreGraphics -framework IOSurface -framework CoreVideo
 )
 xcrun clang -fobjc-arc -Wall -Wextra -Werror -I "$ghostty_source/include" \
-    "${probe_cflags[@]}" \
+    ${probe_cflags[@]+"${probe_cflags[@]}"} \
     "$probe_dir/production-surface-probe.m" "$macos_library" -lc++ \
     "${frameworks[@]}" -framework AppKit -framework Carbon -o "$probe_build/surface-probe"
 "$probe_build/surface-probe" "$probe_build/surface-fixture.bin" "$probe_build/surface-modes.bin"
@@ -97,7 +97,7 @@ cp "$probe_build/surface-fixture.bin" "$probe_app/surface-fixture.bin"
 cp "$probe_build/surface-modes.bin" "$probe_app/surface-modes.bin"
 simulator_sdk=$(xcrun --sdk iphonesimulator --show-sdk-path)
 xcrun clang -fobjc-arc -Wall -Wextra -Werror -target arm64-apple-ios15.0-simulator \
-    "${probe_cflags[@]}" \
+    ${probe_cflags[@]+"${probe_cflags[@]}"} \
     -isysroot "$simulator_sdk" -I "$ghostty_source/include" \
     "$probe_dir/production-surface-probe.m" "$ios_library" -lc++ \
     "${frameworks[@]}" -framework UIKit -o "$probe_app/SurfaceProbe"

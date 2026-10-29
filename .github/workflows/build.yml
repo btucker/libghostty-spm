@@ -90,6 +90,9 @@ jobs:
           git clone https://github.com/ghostty-org/ghostty ./References/ghostty-upstream
           git -C ./References/ghostty-upstream checkout "${{ needs.prepare.outputs.ghostty_ref }}"
 
+      - name: Ensure Metal Compiler
+        run: if ! xcrun --sdk macosx metal --version; then xcodebuild -downloadComponent MetalToolchain; fi
+
       - name: Build Target
         run: |
           export ZIG_CPU="${{ matrix.cpu }}"
@@ -192,6 +195,7 @@ jobs:
 
       - name: Test Packaged Paging on Mac and iOS Simulator
         run: |
+          if ! xcrun --sdk macosx metal --version; then xcodebuild -downloadComponent MetalToolchain; fi
           git clone https://github.com/ghostty-org/ghostty References/ghostty-upstream
           git -C References/ghostty-upstream checkout "$(cat Ghostty.ref)"
           Script/apply-patches.sh "$PWD/References/ghostty-upstream"

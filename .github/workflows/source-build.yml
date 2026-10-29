@@ -52,6 +52,9 @@ jobs:
           git clone https://github.com/ghostty-org/ghostty ./References/ghostty-upstream
           git -C ./References/ghostty-upstream checkout "$(tr -d '[:space:]' < Ghostty.ref)"
 
+      - name: Ensure Metal Compiler
+        run: if ! xcrun --sdk macosx metal --version; then xcodebuild -downloadComponent MetalToolchain; fi
+
       - name: Build
         run: |
           export ZIG_CPU="${{ matrix.cpu }}"
