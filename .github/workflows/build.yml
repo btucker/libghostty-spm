@@ -175,6 +175,11 @@ jobs:
             "$PWD/BinaryTarget/GhosttyKit.xcframework" \
             "$PWD/build/GhosttyKit.xcframework.zip"
 
+      - name: Setup Zig for Paging Probes
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
       - name: Record Paging Provenance
         run: |
           python3 Paging/provenance.py write --source "${{ github.sha }}"
@@ -184,11 +189,6 @@ jobs:
 
       - name: Test XCFramework Consumer
         run: ./Script/test-xcframework-consumer.sh "$PWD/BinaryTarget/GhosttyKit.xcframework"
-
-      - name: Setup Zig for Paging Probes
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
 
       - name: Test Packaged Paging on Mac and iOS Simulator
         run: |
