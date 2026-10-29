@@ -137,7 +137,7 @@ jobs:
 
   merge-release:
     needs: [prepare, build-target]
-    if: always() && needs.prepare.outputs.build_needed == 'true' && (needs.build-target.result == 'success' || needs.prepare.outputs.native_run_id != '')
+    if: ${{ !cancelled() && needs.prepare.outputs.build_needed == 'true' && (needs.build-target.result == 'success' || needs.prepare.outputs.native_run_id != '') }}
     runs-on: macos-26
     timeout-minutes: 60
     steps:
