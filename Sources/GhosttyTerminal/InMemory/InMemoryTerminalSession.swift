@@ -12,7 +12,8 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
     private static let slowSurfaceWriteThreshold: TimeInterval = 0.5
 
     private let resizeLock = NSLock()
-    private let surfaceAccess: InMemoryTerminalSurfaceAccess
+    let surfaceAccess: InMemoryTerminalSurfaceAccess
+    let snapshotOperations: InMemoryTerminalSnapshotOperations
     private var lastResize: InMemoryTerminalViewport?
     private let writeHandler: @Sendable (Data) -> Void
     private let resizeHandler: @Sendable (InMemoryTerminalViewport) -> Void
@@ -39,6 +40,7 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         writeHandler = write
         resizeHandler = resize
         self.suppressesPixelOnlyResizes = suppressesPixelOnlyResizes
+        snapshotOperations = .live
         surfaceAccess = InMemoryTerminalSurfaceAccess(
             write: Self.writeToSurface,
             processExit: Self.reportProcessExit,
@@ -56,10 +58,12 @@ public final class InMemoryTerminalSession: @unchecked Sendable {
         processExit: @escaping InMemoryTerminalSurfaceAccess.ProcessExit =
             InMemoryTerminalSession.reportProcessExit,
         tick: @escaping InMemoryTerminalSurfaceAccess.Tick = { _ in },
+        snapshotOperations: InMemoryTerminalSnapshotOperations = .live,
     ) {
         writeHandler = write
         resizeHandler = resize
         self.suppressesPixelOnlyResizes = suppressesPixelOnlyResizes
+        self.snapshotOperations = snapshotOperations
         surfaceAccess = InMemoryTerminalSurfaceAccess(
             write: surfaceWrite,
             processExit: processExit,

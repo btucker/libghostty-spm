@@ -83,11 +83,7 @@ xcodebuild -create-xcframework \
 if [ -n "$OUTPUT_ZIP" ]; then
     mkdir -p "$(dirname "$OUTPUT_ZIP")"
     rm -f "$OUTPUT_ZIP"
-    (
-        cd "$(dirname "$OUTPUT_XCFRAMEWORK")"
-        ditto -c -k --sequesterRsrc --keepParent "$(basename "$OUTPUT_XCFRAMEWORK")" "$(basename "$OUTPUT_ZIP")"
-    )
-    mv "$(dirname "$OUTPUT_XCFRAMEWORK")/$(basename "$OUTPUT_ZIP")" "$OUTPUT_ZIP"
+    python3 Paging/pack-xcframework.py "$OUTPUT_XCFRAMEWORK" "$OUTPUT_ZIP"
     ./Script/verify-xcframework.sh "$OUTPUT_ZIP"
     echo "[*] packed xcframework zip: $OUTPUT_ZIP"
 fi

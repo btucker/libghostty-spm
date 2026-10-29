@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/source-build.yml
       - Ghostty.ref
+      - Paging/**
       - Patches/**
       - Script/apply-patches.sh
       - Script/build-ghostty.sh
@@ -35,13 +36,6 @@ jobs:
           - target: aarch64-ios-simulator
             cpu: apple_a17
           - target: x86_64-ios-simulator
-          - target: aarch64-maccatalyst
-            cpu: apple_a17
-          - target: x86_64-maccatalyst
-          - target: aarch64-visionos
-          - target: aarch64-visionos-simulator
-            cpu: apple_a17
-          - target: x86_64-visionos-simulator
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -57,6 +51,9 @@ jobs:
         run: |
           git clone https://github.com/ghostty-org/ghostty ./References/ghostty-upstream
           git -C ./References/ghostty-upstream checkout "$(tr -d '[:space:]' < Ghostty.ref)"
+
+      - name: Ensure Metal Compiler
+        run: if ! xcrun --sdk macosx metal --version; then xcodebuild -downloadComponent MetalToolchain; fi
 
       - name: Build
         run: |

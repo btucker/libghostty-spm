@@ -36,18 +36,26 @@ struct InMemoryTerminalTeardownTests {
 
         // Rescue the old blocking implementation so RED reports a failure
         // rather than leaving the test process deadlocked forever.
-        DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+        let teardownFinished = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            guard teardownFinished.wait(timeout: .now() + 30) == .timedOut else { return }
             events.append("watchdog rescue")
             for _ in 0..<128 { mailboxSpace.signal() }
         }
-        let start = ProcessInfo.processInfo.systemUptime
+        var drains = 0
         session.clearSurface(ifMatches: surface, whileWaiting: {
             #expect(session.currentSurface == nil)
-            mailboxSpace.signal()
+            drains += 1
+            // One native mailbox holds 64 messages. Require repeated drains
+            // without turning 128 scheduler wakeups into a speed assertion.
+            for _ in 0..<64 { mailboxSpace.signal() }
         })
+        teardownFinished.signal()
+        #expect(drains >= 2)
         events.append("free")
-        #expect(ProcessInfo.processInfo.systemUptime - start < 0.5)
         #expect(!session.waitForPendingOutput())
+        // The exact sequence also proves the watchdog did not rescue a
+        // blocked implementation, without a scheduler-dependent time bound.
         #expect(events.values == ["active", "writer finished", "free"])
         session.setSurface(UnsafeMutableRawPointer(bitPattern: 2)!)
         #expect(session.waitForPendingOutput())

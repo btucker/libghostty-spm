@@ -51,6 +51,7 @@ build_variant() {
         else
             ./Script/build-ghostty.sh "$SOURCE_DIR" "$target" "$target_dir"
         fi
+        python3 Paging/toolchain.py "$target" "$target_dir"
         libraries+=("$target_dir/lib/libghostty.a")
         if [ -z "$first_headers" ]; then
             first_headers="$target_dir/include"

@@ -4,12 +4,15 @@ Swift Package wrapping [Ghostty](https://ghostty.org)'s terminal emulator librar
 
 > Pre-built `libghostty` static library distributed as an XCFramework binary target.
 
+This fork publishes Graftty's pinned paging renderer for macOS and iOS. See
+[production builds and provenance](Paging/README.md) for the source pins, supported
+slices, native probes, and immutable two-stage publication process. Engine upgrades
+are explicit; the upstream weekly update workflow is not used by this fork.
+
 ## Platforms
 
 - macOS 13+
 - iOS 15+
-- Mac Catalyst 15+
-- visionOS 1+
 
 Requires Swift 6.2 (Xcode 26 or later). The package builds in the Swift 6
 language mode.
@@ -27,7 +30,7 @@ language mode.
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Lakr233/libghostty-spm.git", from: "1.5.2"),
+    .package(url: "https://github.com/btucker/libghostty-spm.git", from: "1.5.2"),
 ]
 ```
 

@@ -6,6 +6,7 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
     static let maximumWriteSize = 4096
     typealias Write = @Sendable (ghostty_surface_t, Data) -> Void
     typealias ProcessExit = @Sendable (ghostty_surface_t, UInt32, UInt64) -> Void
+    typealias MainScheduler = @Sendable (@escaping @Sendable () -> Void) -> Void
     typealias Tick = @Sendable (ghostty_surface_t) -> Void
 
     private let condition = NSCondition()
@@ -16,6 +17,9 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
     private let write: Write
     private let processExit: ProcessExit
     private let tick: Tick
+    private let scheduleOnMain: MainScheduler
+    private var mainThreadOperations: [UUID: SnapshotMainQueueOperation] = [:]
+    private var queuedOperationCancellations: [UUID: @Sendable () -> Void] = [:]
 
     /// Lease state is protected by `condition`. Mailbox callbacks run only
     /// during main-thread waits, with the condition unlocked.
@@ -79,10 +83,12 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
         write: @escaping Write,
         processExit: @escaping ProcessExit,
         tick: @escaping Tick = { _ in },
+        scheduleOnMain: @escaping MainScheduler = { DispatchQueue.main.async(execute: $0) },
     ) {
         self.write = write
         self.processExit = processExit
         self.tick = tick
+        self.scheduleOnMain = scheduleOnMain
     }
 
     func setSurface(
@@ -92,6 +98,9 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
     ) {
         condition.lock()
         let previous = self.surface
+        let cancellations = Array(queuedOperationCancellations.values)
+        queuedOperationCancellations.removeAll()
+        operations.discardCustomOperations()
         generation &+= 1
         let replacementGeneration = generation
         self.surface = nil
@@ -116,6 +125,7 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
         let backlogChange = takeBacklogChange()
         condition.unlock()
         backlogChange?()
+        cancellations.forEach { $0() }
     }
 
     @discardableResult
@@ -131,7 +141,10 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
         }
         let matches = surface?.rawValue == expectedSurface
         let previous = matches ? surface : retiringSurfaces[expectedSurface]
+        let cancellations = matches ? Array(queuedOperationCancellations.values) : []
         if matches {
+            queuedOperationCancellations.removeAll()
+            operations.discardCustomOperations()
             generation &+= 1
             surface = nil
             retire(previous)
@@ -140,6 +153,7 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
         // joins its own calls before freeing, without clearing the new one.
         waitForActiveOperations(on: previous, progress: progress)
         condition.unlock()
+        cancellations.forEach { $0() }
         return matches
     }
 
@@ -197,6 +211,71 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
         if surface != nil {
             scheduleDrain()
         }
+    }
+
+    /// Snapshot/history work shares the bounded host-output queue, so a
+    /// drain batch cannot overtake an installation. Unlike live output,
+    /// these calls belong to the surface generation that queued them.
+    func enqueueOperation<Result: Sendable>(
+        onMainThread: Bool = false,
+        operation: @escaping @Sendable (ghostty_surface_t) -> Result,
+        completion: @escaping @Sendable (Result?) -> Void
+    ) {
+        let result = SnapshotQueueCompletion(completion)
+        let id = UUID()
+        condition.lock()
+        guard surface != nil else {
+            condition.unlock()
+            result.complete(nil)
+            return
+        }
+        let expectedGeneration = generation
+        queuedOperationCancellations[id] = { result.complete(nil) }
+        operations.append(.custom { [self] in
+            guard !result.isCompleted else { return }
+            let run: @Sendable () -> Void = { [self] in
+                result.complete(withSurface(generation: expectedGeneration, operation))
+                condition.lock()
+                queuedOperationCancellations.removeValue(forKey: id)
+                condition.unlock()
+            }
+            if onMainThread {
+                let finished = DispatchSemaphore(value: 0)
+                let mainOperation = SnapshotMainQueueOperation { [self] in
+                    // Acquire the lease after entering main. Teardown must
+                    // never wait for a lease whose work is queued on main.
+                    run()
+                    condition.lock()
+                    mainThreadOperations.removeValue(forKey: id)
+                    condition.unlock()
+                    finished.signal()
+                }
+                condition.lock()
+                mainThreadOperations[id] = mainOperation
+                condition.unlock()
+                scheduleOnMain { mainOperation.run() }
+                finished.wait()
+            } else {
+                run()
+            }
+        })
+        scheduleDrain()
+        condition.unlock()
+    }
+
+    private func withSurface<Result>(
+        generation expectedGeneration: UInt64,
+        _ operation: (ghostty_surface_t) -> Result
+    ) -> Result? {
+        condition.lock()
+        guard generation == expectedGeneration, let surface else {
+            condition.unlock()
+            return nil
+        }
+        surface.activeOperations += 1
+        condition.unlock()
+        defer { finishOperation(on: surface) }
+        return operation(surface.rawValue)
     }
 
     func withCurrentSurface<Result>(
@@ -262,10 +341,14 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
     private func tickCurrentSurface() {
         condition.lock()
         let current = surface
+        let pendingMain = Array(mainThreadOperations.values)
         condition.unlock()
         if let current {
             current.processMailbox()
         }
+        // A synchronous main-thread output barrier must also make progress
+        // on snapshot work already dispatched to main, not only native ticks.
+        pendingMain.forEach { $0.run() }
     }
 
     /// Called with the lock held. Each operation goes to the surface
@@ -297,11 +380,18 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
             condition.unlock()
             return false
         }
+        if case let .custom(run) = operation {
+            condition.unlock()
+            run?()
+            return true
+        }
         surface.activeOperations += 1
         condition.unlock()
 
         defer { finishOperation(on: surface) }
         switch operation {
+        case .custom:
+            preconditionFailure("Custom operations run without retaining a surface")
         case let .write(data):
             write(surface.rawValue, data)
         case let .processExit(exitCode, runtimeMilliseconds):
@@ -362,5 +452,44 @@ final class InMemoryTerminalSurfaceAccess: @unchecked Sendable {
                 _ = condition.wait(until: Date(timeIntervalSinceNow: Self.retirementPollInterval))
             }
         }
+    }
+}
+
+/// Generation invalidation and queue execution can race; a continuation
+/// must still be resumed exactly once, outside all surface-access locks.
+private final class SnapshotQueueCompletion<Result: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completion: (@Sendable (Result?) -> Void)?
+    init(_ completion: @escaping @Sendable (Result?) -> Void) {
+        self.completion = completion
+    }
+    var isCompleted: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return completion == nil
+    }
+    func complete(_ value: Result?) {
+        lock.lock()
+        let callback = completion
+        completion = nil
+        lock.unlock()
+        callback?(value)
+    }
+}
+
+/// Main can run this work during a synchronous barrier before its scheduled
+/// callback fires. The later callback must not execute it a second time.
+private final class SnapshotMainQueueOperation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var operation: (@Sendable () -> Void)?
+    init(_ operation: @escaping @Sendable () -> Void) {
+        self.operation = operation
+    }
+    func run() {
+        lock.lock()
+        let callback = operation
+        operation = nil
+        lock.unlock()
+        callback?()
     }
 }

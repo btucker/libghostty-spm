@@ -43,7 +43,6 @@ test_build "GhosttyKit" "generic/platform=macOS"
 test_build "GhosttyKit" "generic/platform=iOS"
 test_build "GhosttyKit" "generic/platform=iOS Simulator"
 test_build "GhosttyTerminal" "generic/platform=macOS"
-test_build "GhosttyTerminal" "generic/platform=macOS,variant=Mac Catalyst"
 test_build "GhosttyTerminal" "generic/platform=iOS"
 test_build "GhosttyTerminal" "generic/platform=iOS Simulator"
 

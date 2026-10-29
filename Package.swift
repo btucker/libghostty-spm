@@ -16,8 +16,6 @@ let package = Package(
     platforms: [
         .iOS(.v15),
         .macOS(.v13),
-        .macCatalyst(.v15),
-        .visionOS(.v1),
     ],
     products: [
         .library(name: "GhosttyKit", targets: ["GhosttyKit"]),
@@ -65,8 +63,8 @@ let package = Package(
         ),
         .binaryTarget(
             name: "libghostty",
-            url: "https://github.com/Lakr233/libghostty-spm/releases/download/upstream.1e9e14af5df1/GhosttyKit.xcframework.zip",
-            checksum: "f2ee2e025ddcdcd347e3e22e6508a1d129e1f543e30d500a2526b93d80bbc632"
+            url: "https://github.com/btucker/libghostty-spm/releases/download/upstream.8af6897c0afc-2/GhosttyKit.xcframework.zip",
+            checksum: "370c2921e27dcc9192be154ef6172442d24c6ef552810ed7d9ebe05b252042fe"
         ),
         .testTarget(
             name: "GhosttyKitTest",

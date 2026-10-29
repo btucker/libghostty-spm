@@ -9,6 +9,11 @@ name: Release Package
 on:
   workflow_dispatch:
     inputs:
+      publish:
+        description: Publish with GITHUB_TOKEN. Disable for a tested handoff when this branch changes workflows.
+        required: false
+        type: boolean
+        default: true
       package_version:
         description: "Package version to publish. Empty derives <latest major.minor>.<UTC YYYYMMDD><NN> (NN: that day's revision, 01 first); pass one to move major or minor."
         required: false
@@ -104,19 +109,24 @@ jobs:
           fi
 
           echo "[*] package_version=$PACKAGE_VERSION storage_tag=$STORAGE_TAG"
-          echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
-          echo "ghostty_ref=$GHOSTTY_REF" >> "$GITHUB_OUTPUT"
-          echo "storage_tag=$STORAGE_TAG" >> "$GITHUB_OUTPUT"
+          {
+            echo "package_version=$PACKAGE_VERSION"
+            echo "ghostty_ref=$GHOSTTY_REF"
+            echo "storage_tag=$STORAGE_TAG"
+          } >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download XCFramework
         run: |
           gh release download "${{ steps.release.outputs.storage_tag }}" \
-            --pattern GhosttyKit.xcframework.zip \
+            --pattern GhosttyKit.xcframework.zip --pattern PAGING-BUILD.json --pattern SHA256SUMS \
             --dir ./build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify Download Checksums
+        run: cd build && shasum -a 256 --check SHA256SUMS
 
       - name: Generate Manifest
         run: |
@@ -129,6 +139,13 @@ jobs:
           mkdir -p BinaryTarget
           ditto -x -k ./build/GhosttyKit.xcframework.zip BinaryTarget/
           test -d BinaryTarget/GhosttyKit.xcframework
+
+      - name: Verify Paging Provenance
+        run: |
+          cp build/PAGING-BUILD.json PAGING-BUILD.json
+          python3 Paging/provenance.py refresh-wrapper --source "${{ github.sha }}"
+          python3 Paging/provenance.py verify
+          cp PAGING-BUILD.json /tmp/PAGING.release.json
 
       - name: Test XCFramework Consumer
         run: ./Script/test-xcframework-consumer.sh "$PWD/BinaryTarget/GhosttyKit.xcframework"
@@ -147,20 +164,44 @@ jobs:
           git clean -fdx
           git reset --hard
           cp /tmp/Package.release.swift Package.swift
+          cp /tmp/PAGING.release.json PAGING-BUILD.json
 
       - name: Commit & Push
+        id: commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Package.swift
+          git add Package.swift PAGING-BUILD.json
           git commit -m "release: ${{ steps.release.outputs.package_version }}" || echo "No changes to commit"
           git push
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Stage Tested Publication
+        run: |
+          mkdir -p /tmp/package-publication
+          cp Package.swift PAGING-BUILD.json /tmp/package-publication/
+          python3 - <<'METADATA'
+          import json, os
+          from pathlib import Path
+          Path('/tmp/package-publication/release.json').write_text(json.dumps({
+              'kind': 'package', 'tag': '${{ steps.release.outputs.package_version }}',
+              'commit': '${{ steps.commit.outputs.sha }}', 'workflowCommit': os.environ['GITHUB_SHA']
+          }) + '\n')
+          METADATA
+
+      - name: Upload Tested Publication
+        uses: actions/upload-artifact@v4
+        with:
+          name: publication
+          path: /tmp/package-publication/
+          retention-days: 7
 
       - name: Create Release
+        if: inputs.publish
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.release.outputs.package_version }}
-          target_commitish: ${{ github.ref_name }}
+          target_commitish: ${{ steps.commit.outputs.sha }}
           body: |
             GhosttyKit ${{ steps.release.outputs.package_version }}
 
@@ -170,6 +211,7 @@ jobs:
           prerelease: false
 
       - name: Verify Release Consistency
+        if: inputs.publish
         run: ./Script/verify-release.sh "${{ steps.release.outputs.package_version }}" "${{ steps.release.outputs.storage_tag }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
