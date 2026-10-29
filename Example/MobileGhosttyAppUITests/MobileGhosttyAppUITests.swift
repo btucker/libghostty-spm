@@ -836,23 +836,39 @@ import XCTest
             }
 
             func testInlineSelectionScrollsAtBothEdgesAndCopiesHistory() throws {
-                app.terminate()
-                // The app writes the 45 commands itself: XCTest types a string
-                // this long key by key whenever the keyboard is down, slower
-                // than the test waits, and returns before it has all arrived.
-                app.launchArguments = ["--ui-testing", "--ui-testing-history-fixture"]
-                launchApp()
-                let terminal = try requireTerminalInteractionTarget()
-                waitForOutputLine("history-044 left middle right")
-                let output = app.descendants(matching: .any)["terminal.output"].firstMatch
                 func rows(in text: String) -> [Int] {
                     text.components(separatedBy: "history-").dropFirst().compactMap { Int($0.prefix(3)) }
                 }
                 for edge in [0.003, 0.997] {
-                    let before = try XCTUnwrap(output.value as? String)
-                    let firstBefore = try XCTUnwrap(rows(in: before).min())
+                    // Copy restores the viewport where selection began. Give
+                    // each edge its own fixture and room to scroll instead of
+                    // relying on the first drag's viewport surviving Copy.
+                    app.terminate()
+                    // Let the app write the fixture; XCTest types long strings
+                    // key by key and can return before they have all arrived.
+                    app.launchArguments = ["--ui-testing", "--ui-testing-history-fixture"]
+                    launchApp()
+                    let terminal = try requireTerminalInteractionTarget()
+                    waitForOutputLine("history-044 left middle right")
+                    let output = app.descendants(matching: .any)["terminal.output"].firstMatch
+                    if edge > 0.5 {
+                        let bottom = try XCTUnwrap(rows(in: try XCTUnwrap(output.value as? String)).min())
+                        // Pause before release so this pan has no momentum;
+                        // otherwise the next tap only stops the scrolling.
+                        let scrollStart = terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
+                        let scrollEnd = terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8))
+                        scrollStart.press(forDuration: 0.1, thenDragTo: scrollEnd, withVelocity: .slow, thenHoldForDuration: 0.5)
+                        _ = try XCTUnwrap(waitForViewport("history before bottom-edge selection") {
+                            guard let first = rows(in: $0).min() else { return false }
+                            return first < bottom
+                        })
+                    }
                     terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: 0.5)).doubleTap()
                     XCTAssertTrue(app.menuItems["Copy"].waitForExistence(timeout: 4))
+                    // Beginning selection stops scroll momentum; measure the
+                    // starting viewport only after that has happened.
+                    let before = try XCTUnwrap(output.value as? String)
+                    let firstBefore = try XCTUnwrap(rows(in: before).min())
                     let start = terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5))
                     let end = terminal.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: edge))
                     start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 2)
