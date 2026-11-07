@@ -715,6 +715,13 @@ final class TerminalSurfaceCoordinator {
         owningController?.remove(bridge)
         surfaceController = nil
         if hadSurface {
+            // A message the IO thread queued for this surface names it by
+            // address, and the app checks that address only by membership.
+            // The allocator gives it straight to the next surface on this
+            // app, so an exit still queued would land there: the live child
+            // reads as exited and the next key closes the surface. Draining
+            // while the address is unknown drops those messages.
+            controller?.tick()
             (delegate as? any TerminalSurfaceLifecycleDelegate)?
                 .terminalDidDetachSurface()
         }
