@@ -160,7 +160,7 @@ private enum TerminalCallbacks {
         userdata: UnsafeMutableRawPointer?,
         clipboard _: ghostty_clipboard_e,
         statePtr: UnsafeMutableRawPointer?,
-        mimes: UnsafePointer<UnsafePointer<CChar>?>?,
+        mimes: UnsafePointer<UnsafePointer<CChar>>?,
         mimesLen: Int,
         listAvailable: Bool,
     ) -> ghostty_clipboard_read_result_e {
@@ -301,23 +301,21 @@ private func copyClipboardContents(
     guard let ptr, count > 0 else { return [] }
     let buffer = UnsafeBufferPointer(start: ptr, count: count)
     return buffer.compactMap { item in
-        guard let mimePtr = item.mime else { return nil }
-        let mime = String(cString: mimePtr)
-        guard let dataPtr = item.data, item.len > 0 else {
+        let mime = String(cString: item.mime)
+        guard item.len > 0 else {
             return TerminalClipboardContent(mime: mime, data: Data())
         }
-        let data = Data(bytes: UnsafeRawPointer(dataPtr), count: item.len)
+        let data = Data(bytes: UnsafeRawPointer(item.data), count: item.len)
         return TerminalClipboardContent(mime: mime, data: data)
     }
 }
 
 private func copyMimeList(
-    _ ptr: UnsafePointer<UnsafePointer<CChar>?>?,
+    _ ptr: UnsafePointer<UnsafePointer<CChar>>?,
     count: Int,
 ) -> [String] {
     guard let ptr, count > 0 else { return [] }
-    let buffer = UnsafeBufferPointer(start: ptr, count: count)
-    return buffer.compactMap { $0.map { String(cString: $0) } }
+    return UnsafeBufferPointer(start: ptr, count: count).map { String(cString: $0) }
 }
 
 /// Builds a `ghostty_clipboard_complete_s` over freshly allocated,
@@ -332,25 +330,17 @@ func withClipboardCompletePayload<R>(
     remember: Bool,
     _ body: (UnsafePointer<ghostty_clipboard_complete_s>) -> R,
 ) -> R {
-    var mimeCStrings: [UnsafeMutablePointer<CChar>?] = []
+    var mimeCStrings: [UnsafeMutablePointer<CChar>] = []
     var dataBuffers: [UnsafeMutableRawPointer] = []
-    var availableCStrings: [UnsafeMutablePointer<CChar>?] = []
+    var availableCStrings: [UnsafeMutablePointer<CChar>] = []
     defer {
-        for mimeCString in mimeCStrings {
-            if let p = mimeCString {
-                free(p)
-            }
-        }
+        mimeCStrings.forEach { free($0) }
         dataBuffers.forEach { free($0) }
-        for availableCString in availableCStrings {
-            if let p = availableCString {
-                free(p)
-            }
-        }
+        availableCStrings.forEach { free($0) }
     }
 
     let cContents: [ghostty_clipboard_content_s] = contents.map { content in
-        let mimePtr = strdup(content.mime)
+        let mimePtr = duplicateCString(content.mime)
         mimeCStrings.append(mimePtr)
         let byteCount = content.data.count
         let dataPtr = UnsafeMutableRawPointer.allocate(
@@ -366,14 +356,14 @@ func withClipboardCompletePayload<R>(
         }
         dataBuffers.append(dataPtr)
         return ghostty_clipboard_content_s(
-            mime: mimePtr.map { UnsafePointer($0) },
+            mime: UnsafePointer(mimePtr),
             data: dataPtr.assumingMemoryBound(to: CChar.self),
             len: byteCount,
         )
     }
 
-    availableCStrings = available.map { strdup($0) }
-    let availablePtrs: [UnsafePointer<CChar>?] = availableCStrings.map { $0.map { UnsafePointer($0) } }
+    availableCStrings = available.map(duplicateCString)
+    let availablePtrs: [UnsafePointer<CChar>] = availableCStrings.map { UnsafePointer($0) }
 
     return cContents.withUnsafeBufferPointer { contentsBuf in
         availablePtrs.withUnsafeBufferPointer { availableBuf in
@@ -417,7 +407,7 @@ func terminalControllerWakeupCallback(userdata: UnsafeMutableRawPointer?) {
 }
 
 func terminalControllerActionCallback(
-    appPtr: ghostty_app_t?,
+    appPtr: ghostty_app_t,
     target: ghostty_target_s,
     action: ghostty_action_s,
 ) -> Bool {
@@ -434,7 +424,7 @@ func terminalControllerCloseSurfaceCallback(
 func terminalControllerWriteClipboardCallback(
     userdata: UnsafeMutableRawPointer?,
     clipboard: ghostty_clipboard_e,
-    contents: UnsafePointer<ghostty_clipboard_content_s>?,
+    contents: UnsafePointer<ghostty_clipboard_content_s>,
     contentsLen: Int,
     confirm: Bool,
 ) {
@@ -450,8 +440,8 @@ func terminalControllerWriteClipboardCallback(
 func terminalControllerReadClipboardCallback(
     userdata: UnsafeMutableRawPointer?,
     clipboard: ghostty_clipboard_e,
-    statePtr: UnsafeMutableRawPointer?,
-    mimes: UnsafePointer<UnsafePointer<CChar>?>?,
+    statePtr: UnsafeMutableRawPointer,
+    mimes: UnsafePointer<UnsafePointer<CChar>>,
     mimesLen: Int,
     listAvailable: Bool,
 ) -> ghostty_clipboard_read_result_e {
@@ -467,8 +457,8 @@ func terminalControllerReadClipboardCallback(
 
 func terminalControllerConfirmReadClipboardCallback(
     userdata: UnsafeMutableRawPointer?,
-    confirm: UnsafePointer<ghostty_clipboard_confirm_s>?,
-    statePtr: UnsafeMutableRawPointer?,
+    confirm: UnsafePointer<ghostty_clipboard_confirm_s>,
+    statePtr: UnsafeMutableRawPointer,
     request: ghostty_clipboard_request_e,
 ) {
     TerminalCallbacks.confirmReadClipboard(
@@ -477,4 +467,10 @@ func terminalControllerConfirmReadClipboardCallback(
         statePtr: statePtr,
         request: request,
     )
+}
+
+/// `strdup` that treats allocation failure like any other Swift allocation.
+private func duplicateCString(_ string: String) -> UnsafeMutablePointer<CChar> {
+    guard let copy = strdup(string) else { fatalError("strdup failed: out of memory") }
+    return copy
 }

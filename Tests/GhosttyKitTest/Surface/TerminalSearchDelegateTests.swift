@@ -21,13 +21,10 @@ struct TerminalSearchDelegateTests {
     }
 
     @Test
-    func `start search without a needle arrives as nil`() {
+    func `start search with an empty needle arrives as nil`() {
         let (bridge, probe) = Self.bridge()
 
-        var missing = ghostty_action_s()
-        missing.tag = GHOSTTY_ACTION_START_SEARCH
-        missing.action.start_search.needle = nil
-        bridge.handleAction(missing)
+        // ghostty.h declares the needle non-null; an absent one is empty.
         "".withCString { pointer in
             var empty = ghostty_action_s()
             empty.tag = GHOSTTY_ACTION_START_SEARCH
@@ -35,7 +32,7 @@ struct TerminalSearchDelegateTests {
             bridge.handleAction(empty)
         }
 
-        #expect(probe.events == [.start(nil), .start(nil)])
+        #expect(probe.events == [.start(nil)])
     }
 
     @Test

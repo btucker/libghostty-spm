@@ -357,7 +357,9 @@ public final class TerminalController {
         guard !runtimeInitialized else { return }
         runtimeInitialized = true
         GhosttyRuntimeResources.configureEnvironment()
-        ghostty_init(0, nil)
+        // libghostty requires an argv array even when argc is zero.
+        var argv: [UnsafeMutablePointer<CChar>?] = [nil]
+        argv.withUnsafeMutableBufferPointer { _ = ghostty_init(0, $0.baseAddress!) }
     }
 
     deinit {

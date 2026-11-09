@@ -33,8 +33,8 @@ final class TerminalCallbackBridge {
         guard !isRetiring else { return }
         switch action.tag {
         case GHOSTTY_ACTION_SET_TITLE:
-            if let cStr = action.action.set_title.title {
-                let title = String(cString: cStr)
+            do {
+                let title = String(cString: action.action.set_title.title)
                 TerminalDebugLog.log(
                     .actions,
                     "callback action=set_title title=\(TerminalDebugLog.describe(title))",
@@ -112,8 +112,8 @@ final class TerminalCallbackBridge {
 
         case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
             let payload = action.action.desktop_notification
-            let title = payload.title.map { String(cString: $0) } ?? ""
-            let body = payload.body.map { String(cString: $0) } ?? ""
+            let title = String(cString: payload.title)
+            let body = String(cString: payload.body)
             TerminalDebugLog.log(
                 .actions,
                 "callback action=desktop_notification title=\(TerminalDebugLog.describe(title)) body=\(TerminalDebugLog.describe(body))",
@@ -124,12 +124,12 @@ final class TerminalCallbackBridge {
         case GHOSTTY_ACTION_OPEN_URL:
             let payload = action.action.open_url
             let kind = TerminalOpenURLKind(payload.kind)
-            let url: String = payload.url.map { ptr in
-                // Ghostty provides a length-prefixed string; respect the
-                // documented length rather than trusting a NUL terminator.
-                let buf = UnsafeBufferPointer(start: ptr, count: Int(payload.len))
-                return String(decoding: buf.map(UInt8.init), as: UTF8.self)
-            } ?? ""
+            // Ghostty provides a length-prefixed string; respect the
+            // documented length rather than trusting a NUL terminator.
+            let url = String(
+                decoding: UnsafeBufferPointer(start: payload.url, count: Int(payload.len)).map(UInt8.init),
+                as: UTF8.self,
+            )
             TerminalDebugLog.log(
                 .actions,
                 "callback action=open_url kind=\(kind) url=\(TerminalDebugLog.describe(url))",
@@ -150,8 +150,8 @@ final class TerminalCallbackBridge {
         case GHOSTTY_ACTION_MOUSE_OVER_LINK:
             let payload = action.action.mouse_over_link
             let url: String? = {
-                guard let ptr = payload.url, payload.len > 0 else { return nil }
-                let buf = UnsafeBufferPointer(start: ptr, count: Int(payload.len))
+                guard payload.len > 0 else { return nil }
+                let buf = UnsafeBufferPointer(start: payload.url, count: Int(payload.len))
                 return String(decoding: buf.map(UInt8.init), as: UTF8.self)
             }()
             TerminalDebugLog.log(
@@ -163,8 +163,8 @@ final class TerminalCallbackBridge {
 
         case GHOSTTY_ACTION_PWD:
             let payload = action.action.pwd
-            if let cStr = payload.pwd {
-                let pwd = String(cString: cStr)
+            do {
+                let pwd = String(cString: payload.pwd)
                 TerminalDebugLog.log(
                     .actions,
                     "callback action=pwd pwd=\(TerminalDebugLog.describe(pwd))",
@@ -190,10 +190,10 @@ final class TerminalCallbackBridge {
                 )
 
         case GHOSTTY_ACTION_START_SEARCH:
-            let needle = action.action.start_search.needle.map { String(cString: $0) }
-            TerminalDebugLog.log(.actions, "callback action=start_search needle=\(TerminalDebugLog.describe(needle ?? ""))")
+            let needle = String(cString: action.action.start_search.needle)
+            TerminalDebugLog.log(.actions, "callback action=start_search needle=\(TerminalDebugLog.describe(needle))")
             (delegate as? any TerminalSurfaceSearchDelegate)?
-                .terminalDidStartSearch(needle: needle?.isEmpty == false ? needle : nil)
+                .terminalDidStartSearch(needle: needle.isEmpty ? nil : needle)
 
         case GHOSTTY_ACTION_END_SEARCH:
             TerminalDebugLog.log(.actions, "callback action=end_search")
