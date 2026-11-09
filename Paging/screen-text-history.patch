@@ -15,3 +15,12 @@
  
              return switch (self.coord_tag) {
                  // Exact coordinates require a specific pin.
+@@ -2222,7 +2228,7 @@ pub const CAPI = struct {
+         const attachment = surface.snapshot_attachment orelse return false;
+         if (generation != attachment.generation) return false;
+         const t = &core.io.terminal;
+-        if (@intFromEnum(t.screens.active_key) != screen_key) return false;
++        if (@backingInt(t.screens.active_key) != screen_key) return false;
+         const pages = &t.screens.active.pages;
+         return pages.scrollbar().offset <= threshold_rows;
+     }

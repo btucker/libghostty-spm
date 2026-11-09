@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 
-ABI = 'ghostty-53e55147-paging-1'
+ABI = 'ghostty-8af6897c-paging-1'
 
 
 def sha(path):

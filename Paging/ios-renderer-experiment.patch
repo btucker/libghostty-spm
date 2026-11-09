@@ -167,7 +167,7 @@
 +        // and fall through to synchronous release in endFrame.
 +        var cf_release_thread: ?*CFReleaseThread = null;
 +        var cf_release_thr: ?std.Thread = null;
-+        if (comptime builtin.os.tag != .ios) {
++        if (comptime builtin.target.os.tag != .ios) {
 +            const thr_obj = try alloc.create(CFReleaseThread);
 +            errdefer alloc.destroy(thr_obj);
 +            thr_obj.* = try .init(alloc);

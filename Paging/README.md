@@ -8,9 +8,10 @@ pages with the same page layout this renderer decodes. Change both together.
 `screen-text-history.patch` retains the wrapper fork's absolute history
 selection fix. `cursor-timer.patch` carries upstream libghostty-spm's fix that
 stops the cursor timer from redrawing idle and unfocused surfaces.
-The snapshot ABI is `ghostty-53e55147-paging-1`. Ghostty repacked page styles
-after `8af6897c`, so pages from `ghostty-8af6897c-paging-1` producers are not
-compatible; Graftty negotiates the codec and falls back to VT replay for them.
+The snapshot ABI remains `ghostty-8af6897c-paging-1` for the existing zmx
+producer. The snapshot golden fixtures are unchanged from Ghostty 1.4.0 to
+`53e55147`, and Graftty's paged suites pass with the shipped zmx. A zmx built on
+this engine must still prove old decoders skip any new optional records.
 
 Zig 0.17.0's standard library does not compile for iOS. `build-ghostty.sh`
 builds iOS targets against a copy of the std staged by
