@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 
-ABI = 'ghostty-8af6897c-paging-1'
+ABI = 'ghostty-53e55147-paging-1'
 
 
 def sha(path):
@@ -18,7 +18,9 @@ def inputs(root):
         raise ValueError('Ghostty.ref and paging recipe disagree')
     paths = [root / 'Ghostty.ref', root / 'Paging/recipe.json']
     paths += [root / 'Paging' / (name + '.patch') for name in recipe['rendererPatches']]
+    paths += sorted((root / 'Patches/zig').glob(recipe['zig'] + '-*.patch'))
     paths += [root / name for name in ('Script/build-ghostty.sh', 'Script/apply-patches.sh',
+                                     'Script/prepare-zig-lib.sh', 'Paging/patch-zig-packages.py',
                                      'Script/support/libcxx-verbose-abort-compat.c',
                                      'Script/build.sh', 'Script/build-platform.sh', 'Script/merge-xcframework.sh',
                                      'Script/verify-xcframework.sh', 'Paging/pack-xcframework.py',

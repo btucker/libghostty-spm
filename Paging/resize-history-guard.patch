@@ -1,19 +1,18 @@
-diff --git a/src/terminal/Terminal.zig b/src/terminal/Terminal.zig
 --- a/src/terminal/Terminal.zig
 +++ b/src/terminal/Terminal.zig
-@@ -58,6 +58,11 @@
- /// The size of the terminal.
+@@ -60,6 +60,11 @@ tabstops: Tabstops,
  rows: size.CellCountInt,
  cols: size.CellCountInt,
-+
+ 
 +/// Changes before a width resize can mutate screen rows. This is local
 +/// bookkeeping, not snapshot state: returning to an earlier width does not
 +/// make pending pages from before the reflow compatible again.
 +history_reflow_generation: u64 = 0,
-
++
  /// The size of the screen in pixels. This is used for pty events and images
  width_px: u32 = 0,
-@@ -4083,6 +4088,9 @@
+ height_px: u32 = 0,
+@@ -4970,6 +4975,9 @@ pub fn resize(
      // and alt fails than the reverse.
      try tw.check(.primary_screen);
      const primary = self.screens.get(.primary).?;
@@ -23,30 +22,31 @@ diff --git a/src/terminal/Terminal.zig b/src/terminal/Terminal.zig
      try primary.resize(.{
          .cols = opts.cols,
          .rows = opts.rows,
-diff --git a/src/terminal/snapshot/snapshot.zig b/src/terminal/snapshot/snapshot.zig
 --- a/src/terminal/snapshot/snapshot.zig
 +++ b/src/terminal/snapshot/snapshot.zig
-@@ -244,6 +244,7 @@
-         /// Terminal width at READY. Encoded pages assume this width and are
-         /// dropped rather than mixed into a screen reflowed to another.
-         cols: size.CellCountInt,
+@@ -378,6 +378,10 @@ pub const Decoder = struct {
+         /// already applied, so the call that applied it still reports the
+         /// page, and the error is returned by the following call instead.
+         pending_error: ?record.NextHeaderError = null,
++
++        /// Terminal width-reflow generation at READY. A reflow after READY
++        /// invalidates encoded pages even if the width later returns.
 +        reflow_generation: u64,
      };
-
+ 
      const Sequence = struct {
-@@ -382,6 +383,7 @@
-             .pending = screen_count,
-             .current = null,
+@@ -570,6 +574,7 @@ pub const Decoder = struct {
              .cols = result.cols,
+             .page_options = .{ .compress = options.compress_history },
+             .kitty_generations = kitty_generations,
 +            .reflow_generation = result.history_reflow_generation,
          } };
          return .{
              .terminal = result,
-@@ -429,6 +431,21 @@
-             RowCountOverflow,
+@@ -653,6 +658,21 @@ pub const Decoder = struct {
              PageSizeOverflow,
          };
-+
+ 
 +    /// Like `next`, but a width reflow returns HistoryRequiresRecovery before
 +    /// consuming a PAGE or changing the live terminal. HISTORY manifests may
 +    /// be consumed first so empty sequences can complete without recovery.
@@ -61,10 +61,11 @@ diff --git a/src/terminal/snapshot/snapshot.zig b/src/terminal/snapshot/snapshot
 +    ) (NextError || error{HistoryRequiresRecovery})!?Progress {
 +        return self.nextImpl(alloc, t, true);
 +    }
-
-     /// Decode one history PAGE record and prepend it to its screen in `t`.
++
+     /// Decode one history PAGE record and prepend it to its screen in `t`,
+     /// or decode the pixels of one Kitty graphics image or animation frame.
      ///
-@@ -459,6 +476,18 @@
+@@ -697,6 +717,18 @@ pub const Decoder = struct {
          alloc: Allocator,
          t: *Terminal,
      ) NextError!?Progress {
@@ -83,41 +84,56 @@ diff --git a/src/terminal/snapshot/snapshot.zig b/src/terminal/snapshot/snapshot
          switch (self.state) {
              // `ready` must succeed before history exists to decode, and a
              // failed decoder no longer knows its stream position.
-@@ -467,13 +496,18 @@
+@@ -705,7 +737,20 @@ pub const Decoder = struct {
              .finished => return null,
              .history => {},
          }
 -        errdefer self.state = .failed;
-+        errdefer |err| {
++        // A width reflow is recoverable: the caller may still discard the
++        // pending PAGE explicitly. Every other error fails the decoder.
++        return self.nextHistory(alloc, t, require_original_width) catch |err| {
 +            if (err != error.HistoryRequiresRecovery) self.state = .failed;
-+        }
++            return err;
++        };
++    }
++
++    fn nextHistory(
++        self: *Decoder,
++        alloc: Allocator,
++        t: *Terminal,
++        require_original_width: bool,
++    ) (NextError || error{HistoryRequiresRecovery})!?Progress {
          const state = &self.state.history;
-
+ 
          while (true) {
+@@ -724,6 +769,14 @@ pub const Decoder = struct {
              // Stream the current sequence's next PAGE if one remains.
              if (state.current) |*sequence| {
                  if (sequence.remaining > 0) {
 +                    if (require_original_width and (t.cols != state.cols or
 +                        t.history_reflow_generation != state.reflow_generation))
++                    {
++                        // Keep the PAGE header so a later explicit discard
++                        // decodes the untouched record.
++                        state.pending_header = header;
 +                        return error.HistoryRequiresRecovery;
-                     return try self.nextPage(alloc, t, sequence);
++                    }
+                     return try self.nextPage(alloc, t, sequence, header);
                  }
                  state.current = null;
-@@ -532,6 +566,8 @@
+@@ -855,6 +908,8 @@ pub const Decoder = struct {
          const destination: ?*TerminalScreen = destination: {
              if (!sequence.apply) break :destination null;
              if (t.cols != state.cols) break :destination null;
 +            if (t.history_reflow_generation != state.reflow_generation)
 +                break :destination null;
-             const restored = t.screens.get(sequence.key) orelse
-                 break :destination null;
-             if (t.screens.generation(sequence.key) !=
-@@ -1992,7 +2028,118 @@
-     }
-     try testing.expectEqual(2, pages);
+             break :destination self.restoredScreen(t, sequence.key);
+         };
+ 
+@@ -2476,6 +2531,120 @@ test "incremental decode discards history after a resize" {
      try testing.expectEqual(resized_total, primary.pages.scrollbar().total);
-+}
-+
+ }
+ 
 +test "incremental decode discards history after a width round trip" {
 +    const testing = std.testing;
 +    var t = try testHistoryTerminal(2);
@@ -138,13 +154,13 @@ diff --git a/src/terminal/snapshot/snapshot.zig b/src/terminal/snapshot/snapshot
 +    const total = restored.screens.get(.primary).?.pages.total_rows;
 +    var pages: usize = 0;
 +    while (try decoder.next(testing.allocator, &restored)) |progress| {
-+        try testing.expectEqual(0, progress.rows);
++        try testing.expectEqual(0, progress.page.rows);
 +        pages += 1;
 +    }
 +    try testing.expectEqual(2, pages);
 +    try testing.expectEqual(total, restored.screens.get(.primary).?.pages.total_rows);
- }
-
++}
++
 +test "incremental decode preserves pending history when reflow requires recovery" {
 +    const testing = std.testing;
 +    var t = try testHistoryTerminal(2);
@@ -162,7 +178,7 @@ diff --git a/src/terminal/snapshot/snapshot.zig b/src/terminal/snapshot/snapshot
 +        defer restored.deinit(testing.allocator);
 +        if (scenario == 2) {
 +            const first = (try decoder.nextAtOriginalWidth(testing.allocator, &restored)).?;
-+            try testing.expectEqual(2, first.rows);
++            try testing.expectEqual(2, first.page.rows);
 +        }
 +        const offset = source.seek;
 +        try restored.resize(testing.allocator, .{ .cols = if (scenario == 3) 1 else 3, .rows = 3 });
@@ -170,15 +186,18 @@ diff --git a/src/terminal/snapshot/snapshot.zig b/src/terminal/snapshot/snapshot
 +        const total = restored.screens.get(.primary).?.pages.total_rows;
 +        for (0..3) |_| {
 +            try testing.expectError(error.HistoryRequiresRecovery, decoder.nextAtOriginalWidth(testing.allocator, &restored));
-+            const manifest_bytes: usize = if (scenario == 2) 0 else record.Header.len + history.Header.len;
-+            try testing.expectEqual(offset + manifest_bytes, source.seek);
++            // Scenario 2 already holds the next PAGE header from its first
++            // page. Otherwise the manifest and the PAGE header are read, and
++            // the header waits in the decoder for the explicit discard.
++            const consumed: usize = if (scenario == 2) 0 else 2 * record.Header.len + history.Header.len;
++            try testing.expectEqual(offset + consumed, source.seek);
 +            try testing.expectEqual(total, restored.screens.get(.primary).?.pages.total_rows);
 +        }
 +        // A recovery result does not poison the decoder. An explicit discard
 +        // can still validate and drain the untouched original records.
 +        var remaining: usize = 0;
 +        while (try decoder.next(testing.allocator, &restored)) |progress| {
-+            try testing.expectEqual(0, progress.rows);
++            try testing.expectEqual(0, progress.page.rows);
 +            remaining += 1;
 +        }
 +        try testing.expectEqual(@as(usize, if (scenario == 2) 1 else 2), remaining);
@@ -203,7 +222,7 @@ diff --git a/src/terminal/snapshot/snapshot.zig b/src/terminal/snapshot/snapshot
 +    try restored.resize(testing.allocator, .{ .cols = 2, .rows = 4 });
 +    for (0..2) |_| {
 +        const progress = (try decoder.nextAtOriginalWidth(testing.allocator, &restored)).?;
-+        try testing.expectEqual(2, progress.rows);
++        try testing.expectEqual(2, progress.page.rows);
 +    }
 +    // All pages are applied but FINISH is not read yet. A width change must
 +    // not invent a recovery requirement for already complete history.
@@ -231,3 +250,4 @@ diff --git a/src/terminal/snapshot/snapshot.zig b/src/terminal/snapshot/snapshot
 +
  test "decode drops history beyond the declared scrollback limits" {
      const testing = std.testing;
+ 

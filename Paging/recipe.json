@@ -1,7 +1,7 @@
 {
-  "renderer": "8af6897c0afc63037a8a3efee4162a380e3a4572",
+  "renderer": "53e55147bbbb0157672dac0228aa7744e881f1fa",
   "wrapper": "da4d8ddc94ba66f89efa5208961a1116357117c3",
-  "zig": "0.16.0",
+  "zig": "0.17.0",
   "rendererPatches": [
     "preserve-top-anchor",
     "resize-history-guard",
@@ -14,8 +14,9 @@
     "history-boundary",
     "source-grid",
     "snapshot-pwd",
-    "screen-text-history"
+    "screen-text-history",
+    "cursor-timer"
   ],
   "schemaVersion": 1,
-  "snapshotABI": "ghostty-8af6897c-paging-1"
+  "snapshotABI": "ghostty-53e55147-paging-1"
 }

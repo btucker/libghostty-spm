@@ -1,15 +1,18 @@
 #!/bin/bash
 set -euo pipefail
+required_zig=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["zig"])' "$(dirname "$0")/recipe.json")
 if [[ $# -lt 2 || $# -gt 3 ]]; then
-    echo "Usage: $0 <patched-ghostty-source> <zig-0.16.0> [packaged-macos-archive]" >&2
+    echo "Usage: $0 <patched-ghostty-source> <zig> [packaged-macos-archive]" >&2
     exit 2
 fi
 probe_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source_dir=$(cd "$1" && pwd)
 zig_bin=$(command -v "$2")
 zig_bin=$(cd "$(dirname "$zig_bin")" && pwd)/$(basename "$zig_bin")
-[[ $("$zig_bin" version) == 0.16.0 ]] || { echo 'Zig 0.16.0 is required.' >&2; exit 2; }
+[[ $("$zig_bin" version) == "$required_zig" ]] || { echo "Zig $required_zig is required." >&2; exit 2; }
 probe_build=$(mktemp -d "${TMPDIR:-/tmp}/graftty-link-click.XXXXXX")
+# Zig 0.17 reads the global cache only from the environment.
+export ZIG_GLOBAL_CACHE_DIR="${ZIG_GLOBAL_CACHE_DIR:-$probe_build/zig-global}"
 echo "Native link test artifacts: $probe_build"
 # Never modify the input source or its build caches, including zig-pkg links.
 mkdir "$probe_build/source"
@@ -24,7 +27,6 @@ build_library() {
         "$zig_bin" build -Demit-exe=false -Demit-macos-app=false \
             -Demit-xcframework=false -Demit-docs=false -Dsentry=false \
             -Doptimize=ReleaseSafe -Dapp-runtime=none \
-            --global-cache-dir "${ZIG_GLOBAL_CACHE_DIR:-$probe_build/zig-global}" \
             --cache-dir "$probe_build/$variant-cache" --prefix "$probe_build/$variant" \
             --summary failures "$@"
     )

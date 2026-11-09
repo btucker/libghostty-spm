@@ -1,15 +1,23 @@
 # Production paging package
 
 This fork owns the production renderer used by Graftty on macOS and iOS.
-`recipe.json` preserves engine `8af6897c0afc63037a8a3efee4162a380e3a4572`,
-Zig 0.16.0, and the eleven native patches previously assembled in Graftty.
-`screen-text-history.patch` also retains the wrapper fork's existing absolute
-history selection fix on this engine. The full wrapper test suite exposed its
-absence when reading rows beyond the live grid; no engine upgrade is needed.
-The three Swift wrapper patches are applied directly to `Sources/` and `Tests/`,
-on wrapper baseline `da4d8ddc94ba66f89efa5208961a1116357117c3`.
-The snapshot ABI remains `ghostty-8af6897c-paging-1`, compatible with Graftty's
-existing zmx producer. This change does not upgrade the engine or zmx.
+`recipe.json` pins engine `53e55147bbbb0157672dac0228aa7744e881f1fa`, Zig
+0.17.0, and thirteen native patches applied in order. The engine is the
+Ghostty commit pinned by zmx v1.0.1, so Graftty's zmx daemons encode history
+pages with the same page layout this renderer decodes. Change both together.
+`screen-text-history.patch` retains the wrapper fork's absolute history
+selection fix. `cursor-timer.patch` carries upstream libghostty-spm's fix that
+stops the cursor timer from redrawing idle and unfocused surfaces.
+The snapshot ABI is `ghostty-53e55147-paging-1`. Ghostty repacked page styles
+after `8af6897c`, so pages from `ghostty-8af6897c-paging-1` producers are not
+compatible; Graftty negotiates the codec and falls back to VT replay for them.
+
+Zig 0.17.0's standard library does not compile for iOS. `build-ghostty.sh`
+builds iOS targets against a copy of the std staged by
+`Script/prepare-zig-lib.sh` with `Patches/zig/0.17.0-ios-visionos-std.patch`.
+It also runs `Paging/patch-zig-packages.py`, which fixes aro's Apple blocks
+check in the fetched `zig-pkg/` tree so iOS headers translate. Both are native
+inputs recorded by the provenance receipt.
 
 The production package contains universal macOS, arm64 iOS, and universal iOS
 Simulator slices. Catalyst and visionOS require a separate engine integration;
@@ -18,7 +26,7 @@ stack targets the newer engine and is not applied by the production build.
 Weekly automatic engine upgrades have been removed so source changes require
 an explicit patch and snapshot compatibility review.
 
-Run `./build.sh` with Xcode, the Metal toolchain, and Zig 0.16.0 on PATH.
+Run `./build.sh` with Xcode, the Metal toolchain, and Zig 0.17.0 on PATH.
 Use `--source PATH` for an isolated clean checkout of `Ghostty.ref`.
 `BUILD_CACHE_ROOT` can place native caches on another volume.
 A changed patch recipe requires a fresh source checkout. Do not reuse a source

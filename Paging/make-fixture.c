@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <ghostty/vt.h>
 #include <assert.h>
 #include <stdio.h>
@@ -9,8 +10,10 @@ int main(int argc, char **argv) {
     assert(ghostty_terminal_new(NULL, &terminal, 80, 24) == GHOSTTY_SUCCESS);
     size_t limit = 1024;
     assert(ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES, &limit) == GHOSTTY_SUCCESS);
-    assert(ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, NULL) == GHOSTTY_SUCCESS);
-    assert(ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, NULL) == GHOSTTY_SUCCESS);
+    // NULL restores the bounded default; SIZE_MAX removes the limit.
+    size_t unlimited_scrollback = SIZE_MAX;
+    assert(ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &unlimited_scrollback) == GHOSTTY_SUCCESS);
+    assert(ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, &unlimited_scrollback) == GHOSTTY_SUCCESS);
     for (int i = 0; i < 100000; i++) {
         char line[32];
         snprintf(line, sizeof(line), "row-%06d\r\n", i);

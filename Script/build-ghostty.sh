@@ -20,11 +20,21 @@ esac
 cache=${BUILD_CACHE_ROOT:-$root/build/cache}
 mkdir -p "$cache" "$output/lib" "$output/include/libghostty"
 cache=$(cd "$cache" && pwd)
+# Zig 0.17 takes the global cache only from the environment. Package fetches
+# for the zig-pkg patch share it with the build.
+export ZIG_GLOBAL_CACHE_DIR="$cache/zig-global"
+python3 Paging/patch-zig-packages.py "$source_dir"
+# Zig 0.17.0's std does not compile for iOS. Build those targets against a
+# patched copy of the std staged by prepare-zig-lib.sh; the toolchain itself
+# is left untouched, and macOS targets use it directly.
+if [[ "$target" == *-ios* ]]; then
+    ZIG_LIB_DIR=$(./Script/prepare-zig-lib.sh "$cache" ios-visionos-std)
+    export ZIG_LIB_DIR
+fi
 output=$(cd "$output" && pwd)
 args=(build -Demit-exe=false -Demit-macos-app=false -Demit-xcframework=false
     -Demit-docs=false -Dsentry=false -Doptimize=ReleaseSafe -Dapp-runtime=none
-    "-Dtarget=$target" --global-cache-dir "$cache/zig-global"
-    --cache-dir "$cache/$target" --prefix "$output" --summary failures)
+    "-Dtarget=$target" --cache-dir "$cache/$target" --prefix "$output" --summary failures)
 if [[ -n "$cpu" ]]; then args+=("-Dcpu=$cpu"); fi
 (cd "$source_dir"; zig "${args[@]}")
 xcrun --sdk "$sdk" clang -target "$clang_target" -Os -fno-sanitize=undefined \

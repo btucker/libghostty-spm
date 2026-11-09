@@ -19,9 +19,12 @@ class ReuseTests(unittest.TestCase):
             root = Path(directory)
             (root / 'Paging').mkdir()
             (root / 'Ghostty.ref').write_text('a' * 40 + '\n')
-            (root / 'Paging/recipe.json').write_text(json.dumps({'renderer': 'a' * 40, 'rendererPatches': ['native']}))
+            (root / 'Paging/recipe.json').write_text(json.dumps({'renderer': 'a' * 40, 'zig': '0.17.0', 'rendererPatches': ['native']}))
             patch = root / 'Paging/native.patch'
             patch.write_text('native patch')
+            (root / 'Patches/zig').mkdir(parents=True)
+            std_patch = root / 'Patches/zig/0.17.0-ios-visionos-std.patch'
+            std_patch.write_text('std patch')
             (root / 'Sources').mkdir()
             wrapper = root / 'Sources/Wrapper.swift'
             wrapper.write_text('// wrapper')
@@ -35,6 +38,12 @@ class ReuseTests(unittest.TestCase):
             source = git('rev-parse', 'HEAD')
             module.verify(root, source)
             wrapper.write_text('// updated wrapper')
+            module.verify(root, source)
+            # The staged Zig std patch is a native input too.
+            std_patch.write_text('different std patch')
+            with self.assertRaises(ValueError):
+                module.verify(root, source)
+            std_patch.write_text('std patch')
             module.verify(root, source)
             patch.write_text('different native patch')
             with self.assertRaises(ValueError):

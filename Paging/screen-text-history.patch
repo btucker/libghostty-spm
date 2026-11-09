@@ -1,6 +1,6 @@
 --- a/src/apprt/embedded.zig
 +++ b/src/apprt/embedded.zig
-@@ -1664,7 +1664,13 @@
+@@ -1704,7 +1704,13 @@ pub const CAPI = struct {
  
              // Clamp our point to the screen bounds.
              const clamped_x = @min(self.x, screen.pages.cols -| 1);

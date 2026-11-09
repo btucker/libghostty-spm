@@ -1,21 +1,24 @@
 #!/bin/bash
 set -euo pipefail
+required_zig=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["zig"])' "$(dirname "$0")/recipe.json")
 
 if [[ $# -lt 2 || $# -gt 3 ]]; then
-    echo "Usage: $0 <patched-ghostty-source> <zig-0.16.0-executable> [simulator-udid]" >&2
+    echo "Usage: $0 <patched-ghostty-source> <zig-executable> [simulator-udid]" >&2
     exit 2
 fi
 probe_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ghostty_source=$(cd "$1" && pwd)
 zig_bin=$(command -v "$2")
 zig_bin=$(cd "$(dirname "$zig_bin")" && pwd)/$(basename "$zig_bin")
-if [[ $("$zig_bin" version) != 0.16.0 ]]; then
-    echo "This test requires Zig 0.16.0." >&2
+if [[ $("$zig_bin" version) != "$required_zig" ]]; then
+    echo "This test requires Zig $required_zig." >&2
     exit 2
 fi
 xcrun --sdk macosx metal --version
 
 probe_build=$(mktemp -d "${TMPDIR:-/tmp}/graftty-surface-probe.XXXXXX")
+# Zig 0.17 reads the global cache only from the environment.
+export ZIG_GLOBAL_CACHE_DIR="${ZIG_GLOBAL_CACHE_DIR:-$probe_build/zig-global}"
 echo "Native paging test artifacts: $probe_build"
 probe_cflags=()
 if [[ ${GRAFTTY_SELECTION_RESIZE_PROBE:-0} == 1 ]]; then
@@ -31,7 +34,6 @@ fi
 common_args=(
     -Demit-exe=false -Demit-macos-app=false -Demit-xcframework=false
     -Demit-docs=false -Dsentry=false -Doptimize=ReleaseSafe
-    --global-cache-dir "${ZIG_GLOBAL_CACHE_DIR:-$probe_build/zig-global}"
 )
 build_library() {
     local variant=$1
@@ -87,7 +89,10 @@ fi
 if [[ -n ${LIBGHOSTTY_TEST_XCFRAMEWORK:-} ]]; then
     ios_library=$(packaged_library ios)
 else
-    build_library ios -Dapp-runtime=none -Dtarget=aarch64-ios-simulator -Dcpu=apple_m1
+    # Zig 0.17.0's std needs the staged iOS patch, as in build-ghostty.sh.
+    ios_zig_lib=$(cd "$probe_dir/.." && PATH="$(dirname "$zig_bin"):$PATH" \
+        ./Script/prepare-zig-lib.sh "$probe_build" ios-visionos-std)
+    ZIG_LIB_DIR=$ios_zig_lib build_library ios -Dapp-runtime=none -Dtarget=aarch64-ios-simulator -Dcpu=apple_m1
     ios_library="$probe_build/ios/lib/libghostty.a"
 fi
 probe_app="$probe_build/SurfaceProbe.app"

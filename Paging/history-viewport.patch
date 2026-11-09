@@ -1,6 +1,19 @@
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -1300,6 +1300,10 @@ GHOSTTY_API bool ghostty_surface_read_selection(ghostty_surface_t, ghostty_text_
+ GHOSTTY_API bool ghostty_surface_read_text(ghostty_surface_t,
+                                               ghostty_selection_s,
+                                               ghostty_text_s*);
++// Current native font size, including runtime zoom. Call on the UI thread.
++GHOSTTY_API float ghostty_surface_font_size(ghostty_surface_t);
++// Read styled history without moving the viewport. offset_len returns row count.
++GHOSTTY_API bool ghostty_surface_read_history(ghostty_surface_t, uint64_t before_row, uint32_t rows, ghostty_text_s*);
+ GHOSTTY_API void ghostty_surface_free_text(ghostty_surface_t, ghostty_text_s*);
+ 
+ #ifdef __APPLE__
 --- a/src/apprt/embedded.zig
 +++ b/src/apprt/embedded.zig
-@@ -2201,6 +2201,57 @@
+@@ -2245,6 +2245,57 @@ pub const CAPI = struct {
          ptr.deinit();
      }
  
@@ -58,23 +71,10 @@
      /// Tell the surface that it needs to schedule a render
      export fn ghostty_surface_refresh(surface: *Surface) void {
          surface.refresh();
---- a/include/ghostty.h
-+++ b/include/ghostty.h
-@@ -1263,6 +1263,10 @@
- GHOSTTY_API bool ghostty_surface_read_text(ghostty_surface_t,
-                                               ghostty_selection_s,
-                                               ghostty_text_s*);
-+// Current native font size, including runtime zoom. Call on the UI thread.
-+GHOSTTY_API float ghostty_surface_font_size(ghostty_surface_t);
-+// Read styled history without moving the viewport. offset_len returns row count.
-+GHOSTTY_API bool ghostty_surface_read_history(ghostty_surface_t, uint64_t before_row, uint32_t rows, ghostty_text_s*);
- GHOSTTY_API void ghostty_surface_free_text(ghostty_surface_t, ghostty_text_s*);
- 
- #ifdef __APPLE__
 --- a/src/terminal/formatter.zig
 +++ b/src/terminal/formatter.zig
-@@ -96,6 +96,10 @@
-     /// is currently only space characters (0x20).
+@@ -97,6 +97,10 @@ pub const Options = struct {
+     /// Whitespace is currently only space characters (0x20).
      trim: bool = true,
  
 +    /// Preserve textless rows with cell backgrounds in styled history copies.
@@ -84,16 +84,23 @@
      /// Replace matching Unicode codepoints with some other values.
      /// This will use the last matching range found in the list.
      codepoint_map: ?std.MultiArrayList(CodepointMap) = .{},
-@@ -1216,7 +1220,15 @@
-             // If this row is blank, accumulate to avoid a bunch of extra
+@@ -1296,10 +1300,19 @@ pub const PageFormatter = struct {
              // work later. If it isn't blank, make sure we dump all our
-             // blanks.
--            if (!Cell.hasTextAny(cells_subset)) {
+             // blanks. In VT a row of cells that only carry a background
+             // (erased while a background color was set) isn't blank,
+-            // since dropping it would lose the color.
+-            if (!Cell.hasTextAny(cells_subset) and
+-                !(emit == .vt and hasBackgroundAny(cells_subset)))
+-            {
++            // since dropping it would lose the color. Styled history copies
++            // may also keep textless rows with any cell styling.
 +            const blank_row = blank: {
-+                for (cells_subset) |cell| {
-+                    if (cell.hasText()) break :blank false;
-+                    if (emit != .plain and self.opts.preserve_styled_blank_rows and
-+                        (!cell.isEmpty() or cell.hasStyling())) break :blank false;
++                if (Cell.hasTextAny(cells_subset)) break :blank false;
++                if (emit == .vt and hasBackgroundAny(cells_subset)) break :blank false;
++                if (emit != .plain and self.opts.preserve_styled_blank_rows) {
++                    for (cells_subset) |cell| {
++                        if (!cell.isEmpty() or cell.hasStyling()) break :blank false;
++                    }
 +                }
 +                break :blank true;
 +            };
@@ -101,7 +108,7 @@
                  blank_rows += 1;
                  continue;
              }
-@@ -7028,3 +7040,48 @@
+@@ -8265,3 +8278,48 @@ test "Page HTML hyperlink point map maps closing to previous cell" {
          try testing.expectEqual(expected_coord, point_map.items[i]);
      }
  }

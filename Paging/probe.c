@@ -1,3 +1,4 @@
+#include <stdint.h>
 // Dependency experiment, not an implementation of the pending TERM-12 specs.
 // Run against the Ghostty revision pinned in README.md, never the shipped ABI.
 #include <ghostty/vt.h>
@@ -38,11 +39,13 @@ static void write_rows(GhosttyTerminal terminal, size_t first, size_t count) {
 
 static Bytes format(GhosttyTerminal terminal, const GhosttySelection *selection) {
   GhosttyFormatter formatter = NULL;
-  GhosttyFormatterTerminalOptions options = {
-    .size = sizeof(options), .emit = GHOSTTY_FORMATTER_FORMAT_PLAIN,
-    .unwrap = true, .trim = true, .selection = selection,
-  };
-  OK(ghostty_formatter_terminal_new(NULL, &formatter, terminal, options));
+  OK(ghostty_formatter_terminal_new(NULL, &formatter, terminal));
+  GhosttyFormatterFormat emit = GHOSTTY_FORMATTER_FORMAT_PLAIN;
+  bool unwrap = true, trim = true;
+  OK(ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_EMIT, &emit));
+  OK(ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_UNWRAP, &unwrap));
+  OK(ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_TRIM, &trim));
+  OK(ghostty_formatter_set(formatter, GHOSTTY_FORMATTER_OPT_SELECTION, selection));
   Bytes text = {0};
   OK(ghostty_formatter_format_alloc(formatter, NULL, &text.bytes, &text.len));
   ghostty_formatter_free(formatter);
@@ -57,7 +60,7 @@ static void equal_bytes(Bytes a, Bytes b) {
 }
 
 static GhosttySelection viewport_row(GhosttyTerminal terminal) {
-  GhosttySelection selection = {.size = sizeof(selection)};
+  GhosttySelection selection = {0};
   GhosttyPoint point = {.tag = GHOSTTY_POINT_TAG_VIEWPORT};
   OK(ghostty_terminal_grid_ref(terminal, point, &selection.start));
   point.value.coordinate.x = 9;
@@ -66,7 +69,7 @@ static GhosttySelection viewport_row(GhosttyTerminal terminal) {
 }
 
 static Bytes selected_text(GhosttyTerminal terminal) {
-  GhosttySelection selection = {.size = sizeof(selection)};
+  GhosttySelection selection = {0};
   OK(ghostty_terminal_get(terminal, GHOSTTY_TERMINAL_DATA_SELECTION, &selection));
   return format(terminal, &selection);
 }
@@ -140,7 +143,7 @@ static void exercise_paging(Bytes snapshot, size_t rows) {
       GHOSTTY_TERMINAL_DATA_VIEWPORT_ACTIVE, &follows_live));
   assert(follows_live);
   ghostty_terminal_scroll_viewport(imported.terminal,
-      (GhosttyTerminalScrollViewport){.tag = GHOSTTY_SCROLL_VIEWPORT_ROW, .value.row = 0});
+      (GhosttyTerminalScrollViewport){.tag = GHOSTTY_TERMINAL_SCROLL_VIEWPORT_ROW, .value.row = 0});
   GhosttySelection selection = viewport_row(imported.terminal);
   OK(ghostty_terminal_set(imported.terminal, GHOSTTY_TERMINAL_OPT_SELECTION, &selection));
   Bytes anchor = format(imported.terminal, &selection);
@@ -218,8 +221,10 @@ int main(void) {
     OK(ghostty_terminal_new(NULL, &source, 80, 24));
     size_t continuation_limit = 1024;
     OK(ghostty_terminal_set(source, GHOSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES, &continuation_limit));
-    OK(ghostty_terminal_set(source, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, NULL));
-    OK(ghostty_terminal_set(source, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, NULL));
+    // NULL restores the bounded default; SIZE_MAX removes the limit.
+    size_t unlimited_scrollback = SIZE_MAX;
+    OK(ghostty_terminal_set(source, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &unlimited_scrollback));
+    OK(ghostty_terminal_set(source, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, &unlimited_scrollback));
     write_rows(source, 0, sizes[n]);
     write_text(source, "\x1b[31");
     Bytes snapshot = {0};
