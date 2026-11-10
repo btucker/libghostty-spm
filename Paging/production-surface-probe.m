@@ -16,6 +16,7 @@ extern size_t IOSurfaceGetWidth(IOSurfaceRef);
 extern size_t IOSurfaceGetHeight(IOSurfaceRef);
 extern size_t IOSurfaceGetBytesPerRow(IOSurfaceRef);
 extern size_t IOSurfaceGetBytesPerElement(IOSurfaceRef);
+extern OSType IOSurfaceGetPixelFormat(IOSurfaceRef);
 extern void *IOSurfaceGetBaseAddress(IOSurfaceRef);
 extern int IOSurfaceLock(IOSurfaceRef, uint32_t, uint32_t *);
 extern int IOSurfaceUnlock(IOSurfaceRef, uint32_t, uint32_t *);
@@ -128,26 +129,41 @@ static void resize_probe(ghostty_surface_t surface, ProbeView *view, uint32_t wi
     ghostty_surface_set_size(surface, width, height);
 }
 
+// The presented IOSurface, or NULL until a frame matching the layer's pixel
+// size is presented. UIKit may round the backing size by one pixel.
+static IOSurfaceRef presented_frame(CALayer *layer) {
+    id contents = layer.contents;
+    if (!contents || CFGetTypeID((__bridge CFTypeRef)contents) != IOSurfaceGetTypeID()) return NULL;
+    IOSurfaceRef frame = (__bridge IOSurfaceRef)contents;
+    const size_t width = IOSurfaceGetWidth(frame), height = IOSurfaceGetHeight(frame);
+    const size_t expected_width = (size_t)(layer.bounds.size.width * layer.contentsScale);
+    const size_t expected_height = (size_t)(layer.bounds.size.height * layer.contentsScale);
+    const size_t dw = width > expected_width ? width - expected_width : expected_width - width;
+    const size_t dh = height > expected_height ? height - expected_height : expected_height - height;
+    const size_t tolerance = TARGET_OS_IPHONE ? 1 : 0;
+    return width > 0 && height > 0 && dw <= tolerance && dh <= tolerance ? frame : NULL;
+}
+
+// Tick and draw until condition holds, for at most 200 polls 10 ms apart.
+static bool wait_until(ghostty_app_t app, ghostty_surface_t surface, bool (^condition)(void)) {
+    for (int attempt = 0; attempt < 200; attempt++) {
+        ghostty_app_tick(app);
+        ghostty_surface_draw(surface);
+        if (condition()) return true;
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+    }
+    return false;
+}
+
+static void write_vt(ghostty_surface_t surface, const char *bytes) {
+    ghostty_surface_write_buffer(surface, (const uint8_t *)bytes, strlen(bytes));
+}
+
 static void wait_frame(ghostty_app_t app, ghostty_surface_t surface, ProbeView *view) {
     CALayer *layer = render_layer(view);
     assert(layer.bounds.size.width > 0 && layer.bounds.size.height > 0);
-    for (int i = 0; i < 200; i++) {
-        ghostty_app_tick(app);
-        ghostty_surface_draw(surface);
-        id contents = layer.contents;
-        if (contents && CFGetTypeID((__bridge CFTypeRef)contents) == IOSurfaceGetTypeID()) {
-            IOSurfaceRef frame = (__bridge IOSurfaceRef)contents;
-            size_t width = IOSurfaceGetWidth(frame), height = IOSurfaceGetHeight(frame);
-            size_t expected_width = (size_t)(layer.bounds.size.width * layer.contentsScale);
-            size_t expected_height = (size_t)(layer.bounds.size.height * layer.contentsScale);
-            size_t dw = width > expected_width ? width - expected_width : expected_width - width;
-            size_t dh = height > expected_height ? height - expected_height : expected_height - height;
-            size_t tolerance = TARGET_OS_IPHONE ? 1 : 0;
-            if (width > 0 && height > 0 && dw <= tolerance && dh <= tolerance) return;
-        }
-        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
-    }
-    assert(!"timed out waiting for a presented IOSurface");
+    if (!wait_until(app, surface, ^bool { return presented_frame(layer) != NULL; }))
+        assert(!"timed out waiting for a presented IOSurface");
 }
 
 static void check_stale_frame(ProbeView *view) {
@@ -187,27 +203,103 @@ static void wait_grid(ghostty_app_t app, ghostty_surface_t surface, uint16_t col
     assert(!"timed out waiting for the terminal grid");
 }
 
+// Lock and retain a presented BGRA frame for reading, or return NULL before a
+// matching frame is presented. Any other pixel format, or a lock failure on a
+// presented frame, is a probe defect and aborts with its cause.
+static IOSurfaceRef lock_bgra_frame(ProbeView *view) {
+    IOSurfaceRef frame = presented_frame(render_layer(view));
+    if (!frame) return NULL;
+    if (IOSurfaceGetPixelFormat(frame) != 'BGRA' || IOSurfaceGetBytesPerElement(frame) != 4) {
+        fprintf(stderr, "unsupported presented frame: format 0x%08x, %zu bytes per element\n",
+                (unsigned)IOSurfaceGetPixelFormat(frame), IOSurfaceGetBytesPerElement(frame));
+        abort();
+    }
+    CFRetain(frame);
+    const int status = IOSurfaceLock(frame, 1, NULL);
+    if (status != 0) {
+        fprintf(stderr, "IOSurfaceLock failed: %d\n", status);
+        abort();
+    }
+    return frame;
+}
+
+static void unlock_frame(IOSurfaceRef frame) {
+    IOSurfaceUnlock(frame, 1, NULL);
+    CFRelease(frame);
+}
+
+static bool pixel_is(const uint8_t *pixel, bool red) {
+    const int dominant = red ? pixel[2] : pixel[0];
+    const int opposite = red ? pixel[0] : pixel[2];
+    return dominant > (int)pixel[1] + 50 && dominant > opposite + 50;
+}
+
 static bool history_pixel_matches(ProbeView *view, bool red) {
-    id contents = render_layer(view).contents;
-    if (!contents || CFGetTypeID((__bridge CFTypeRef)contents) != IOSurfaceGetTypeID()) return false;
-    IOSurfaceRef frame = (__bridge IOSurfaceRef)contents;
-    CALayer *layer = render_layer(view);
-    const size_t expected_width = (size_t)(layer.bounds.size.width * layer.contentsScale);
-    const size_t expected_height = (size_t)(layer.bounds.size.height * layer.contentsScale);
-    const size_t actual_width = IOSurfaceGetWidth(frame), actual_height = IOSurfaceGetHeight(frame);
-    const size_t dw = actual_width > expected_width ? actual_width - expected_width : expected_width - actual_width;
-    const size_t dh = actual_height > expected_height ? actual_height - expected_height : expected_height - actual_height;
-    const size_t tolerance = TARGET_OS_IPHONE ? 1 : 0;
-    if (dw > tolerance || dh > tolerance) return false;
-    if (IOSurfaceGetBytesPerElement(frame) != 4 || IOSurfaceLock(frame, 1, NULL) != 0) return false;
+    IOSurfaceRef frame = lock_bgra_frame(view);
+    if (!frame) return false;
     const uint8_t *pixel = (const uint8_t *)IOSurfaceGetBaseAddress(frame)
         + (IOSurfaceGetHeight(frame) / 2) * IOSurfaceGetBytesPerRow(frame)
         + (IOSurfaceGetWidth(frame) / 2) * 4;
-    const int dominant = red ? pixel[2] : pixel[0];
-    const int opposite = red ? pixel[0] : pixel[2];
-    const bool matches = dominant > (int)pixel[1] + 50 && dominant > opposite + 50;
-    IOSurfaceUnlock(frame, 1, NULL);
+    const bool matches = pixel_is(pixel, red);
+    unlock_frame(frame);
     return matches;
+}
+
+// Whether any red (or blue) background pixel lies within terminal rows
+// [first, last] of a grid `rows` tall. Returns -1 before a frame is presented.
+static int band_has_color(ProbeView *view, bool red, uint16_t first, uint16_t last, uint16_t rows) {
+    IOSurfaceRef frame = lock_bgra_frame(view);
+    if (!frame) return -1;
+    const uint8_t *base = (const uint8_t *)IOSurfaceGetBaseAddress(frame);
+    const size_t width = IOSurfaceGetWidth(frame), height = IOSurfaceGetHeight(frame);
+    const size_t stride = IOSurfaceGetBytesPerRow(frame);
+    const size_t top = height * first / rows, bottom = height * (last + 1) / rows;
+    int found = 0;
+    for (size_t y = top; y < bottom && !found; y++) {
+        const uint8_t *row = base + y * stride;
+        for (size_t x = 0; x < width; x++) {
+            if (pixel_is(row + x * 4, red)) {
+                found = 1;
+                break;
+            }
+        }
+    }
+    unlock_frame(frame);
+    return found;
+}
+
+// The text of one viewport row, read as a single-row selection so soft wraps
+// stay separate, with trailing padding removed. Returns nil when the row cannot
+// be read or decoded, which never matches an expected row.
+static NSString *viewport_row(ghostty_surface_t surface, uint16_t y, uint16_t cols) {
+    const ghostty_selection_s row = {
+        .top_left = {.tag = GHOSTTY_POINT_VIEWPORT, .coord = GHOSTTY_POINT_COORD_EXACT, .x = 0, .y = y},
+        .bottom_right = {.tag = GHOSTTY_POINT_VIEWPORT, .coord = GHOSTTY_POINT_COORD_EXACT, .x = cols - 1, .y = y},
+    };
+    ghostty_text_s text = {0};
+    if (!ghostty_surface_read_text(surface, row, &text)) return nil;
+    NSString *string = [[NSString alloc] initWithBytes:text.text length:text.text_len encoding:NSUTF8StringEncoding];
+    ghostty_surface_free_text(surface, &text);
+    NSCharacterSet *padding = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+    while (string.length && [padding characterIsMember:[string characterAtIndex:string.length - 1]])
+        string = [string substringToIndex:string.length - 1];
+    return string;
+}
+
+// Whether viewport rows equal expected, with every later row empty.
+static bool viewport_rows_are(ghostty_surface_t surface, uint16_t cols, uint16_t rows, NSArray<NSString *> *expected) {
+    for (uint16_t y = 0; y < rows; y++) {
+        NSString *actual = viewport_row(surface, y, cols);
+        if (!actual || ![actual isEqualToString:y < expected.count ? expected[y] : @""]) return false;
+    }
+    return true;
+}
+
+static void dump_viewport_rows(ghostty_surface_t surface, uint16_t cols, uint16_t rows) {
+    for (uint16_t y = 0; y < rows; y++) {
+        NSString *row = viewport_row(surface, y, cols);
+        fprintf(stderr, "  row %2u: %s\n", y, row ? [NSString stringWithFormat:@"\"%@\"", row].UTF8String : "<unreadable>");
+    }
 }
 
 static bool viewport_contains(ghostty_surface_t surface, const char *needle) {
@@ -229,26 +321,26 @@ static void check_source_prompt_history(ghostty_app_t app, ghostty_surface_t sur
     for (int mode = 0; mode < 3; mode++) {
         const int redraw = mode == 0 ? 0 : 1;
         const char *reset = "\x1b" "c";
-        ghostty_surface_write_buffer(surface, (const uint8_t *)reset, strlen(reset));
+        write_vt(surface, reset);
         assert(ghostty_surface_set_source_grid(surface, 80, 24));
         char prompt[80];
         snprintf(prompt, sizeof(prompt), "\x1b]133;A;redraw=%d\a" "prompt> \x1b]133;B\a", redraw);
-        ghostty_surface_write_buffer(surface, (const uint8_t *)prompt, strlen(prompt));
+        write_vt(surface, prompt);
         if (mode == 2) {
             const char *command_output = "\x1b]133;C\a";
-            ghostty_surface_write_buffer(surface, (const uint8_t *)command_output, strlen(command_output));
+            write_vt(surface, command_output);
         }
         for (int row = 0; row < 256; row++) {
             char label[40], line[100];
             snprintf(label, sizeof(label), "history-%03d", row);
             snprintf(line, sizeof(line), "\x1b[48;2;220;30;30m%-60s\x1b[0m\r\n", label);
-            ghostty_surface_write_buffer(surface, (const uint8_t *)line, strlen(line));
+            write_vt(surface, line);
         }
         for (int row = 0; row < 32; row++) {
             char label[40], line[100];
             snprintf(label, sizeof(label), "recent-%03d", row);
             snprintf(line, sizeof(line), "\x1b[48;2;30;30;220m%-60s\x1b[0m\r\n", label);
-            ghostty_surface_write_buffer(surface, (const uint8_t *)line, strlen(line));
+            write_vt(surface, line);
         }
         const uint16_t grids[][2] = {{80, 20}, {80, 24}, {76, 24}, {80, 24}};
         uint16_t previous_cols = 80;
@@ -268,39 +360,18 @@ static void check_source_prompt_history(ghostty_app_t app, ghostty_surface_t sur
             assert(oldest.text && strstr(oldest.text, "history-000"));
             ghostty_surface_free_text(surface, &oldest);
             assert(ghostty_surface_binding_action(surface, "scroll_to_bottom", strlen("scroll_to_bottom")));
-            bool blue = false;
-            for (int attempt = 0; attempt < 200; attempt++) {
-                ghostty_app_tick(app);
-                ghostty_surface_draw(surface);
-                if (viewport_contains(surface, "recent-") && history_pixel_matches(view, false)) {
-                    blue = true;
-                    break;
-                }
-                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
-            }
+            const bool blue = wait_until(app, surface, ^bool { return viewport_contains(surface, "recent-") && history_pixel_matches(view, false); });
             assert(blue);
             assert(ghostty_surface_binding_action(surface, "scroll_to_top", strlen("scroll_to_top")));
-            bool visible = false;
-            for (int attempt = 0; attempt < 200; attempt++) {
-                ghostty_app_tick(app);
-                ghostty_surface_draw(surface);
-                if (viewport_contains(surface, "history-000") && history_pixel_matches(view, true)) {
-                    visible = true;
-                    break;
-                }
-                [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
-            }
+            const bool visible = wait_until(app, surface, ^bool { return viewport_contains(surface, "history-000") && history_pixel_matches(view, true); });
             assert(visible);
         }
         // Source-grid suppression must not disable ordinary shell prompt redraw.
         const char *ordinary = "\x1b]133;C\a\r\n\x1b]133;A\aordinary-prompt> \x1b]133;B\a";
-        ghostty_surface_write_buffer(surface, (const uint8_t *)ordinary, strlen(ordinary));
+        write_vt(surface, ordinary);
         assert(ghostty_surface_binding_action(surface, "scroll_to_bottom", strlen("scroll_to_bottom")));
-        for (int attempt = 0; attempt < 200 && !viewport_contains(surface, "ordinary-prompt>"); attempt++) {
-            ghostty_app_tick(app);
-            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
-        }
-        assert(viewport_contains(surface, "ordinary-prompt>"));
+        const bool ordinary_shown = wait_until(app, surface, ^bool { return viewport_contains(surface, "ordinary-prompt>"); });
+        assert(ordinary_shown);
         assert(ghostty_surface_clear_source_grid(surface));
         resize_probe(surface, view, width + cell_width, height);
         wait_grid(app, surface, 81, 24);
@@ -315,7 +386,100 @@ static void check_source_prompt_history(ghostty_app_t app, ghostty_surface_t sur
                redraw, mode == 2 ? "output" : "input");
     }
     const char *reset = "\x1b" "c";
-    ghostty_surface_write_buffer(surface, (const uint8_t *)reset, strlen(reset));
+    write_vt(surface, reset);
+}
+
+// zmx resizes its own terminal with shell prompt redraw suppressed, so a mirror
+// pinned to its source grid must reflow a wrapped prompt instead of clearing
+// it, then show exactly what the shell redisplays. These rows match bundled
+// zmx 1.0.1-ga35f00a-graftty11 for every OSC 133 redraw mode.
+static void check_source_prompt_reflow(ghostty_app_t app, ghostty_surface_t surface, ProbeView *view) {
+    enum { wide = 80, narrow = 40, rows = 24 };
+    NSArray<NSString *> *before = @[
+        @"prior> echo", @"COMPLETED-OUTPUT",
+        @"OLD-PROMPT-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefg",
+        @"hijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxy",
+        @"zABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789input-tail",
+    ];
+    NSArray<NSString *> *narrowed = @[
+        @"prior> echo", @"COMPLETED-OUTPUT", @"OLD-PROMPT-abcdefghijklmnopqrstuvwxyzABC",
+        @"DEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefg", @"hijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTU",
+        @"VWXYZ0123456789abcdefghijklmnopqrstuvwxy", @"zABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789inp", @"ut-tail",
+    ];
+    NSMutableArray<NSString *> *redrawn = [narrowed mutableCopy];
+    redrawn[7] = @"short> x";
+    NSArray<NSString *> *erased = @[@"prior> echo", @"COMPLETED-OUTPUT", @"clean> y"];
+    NSArray<NSString *> *completed = @[@"prior> echo", @"COMPLETED-OUTPUT", @"clean> y", @"AFTER-OUTPUT", @"next>"];
+    // The 197-cell red prompt plus its 10-cell input spans rows 2-4 at 80
+    // columns and rows 2-7 at 40, so red in rows 5-6 proves a reflowed frame.
+    // After the explicit erase, row 2 holds the blue "clean> " prompt.
+    enum { reflow_first = 5, reflow_last = 6, clean_row = 2 };
+    const char *modes[] = {"0", "1", "last"};
+    for (size_t mode = 0; mode < sizeof(modes) / sizeof(modes[0]); mode++) {
+        char bytes[512];
+        write_vt(surface, "\x1b" "c");
+        assert(ghostty_surface_set_source_grid(surface, wide, rows));
+        snprintf(bytes, sizeof(bytes),
+                 "\x1b]133;A;redraw=%s\aprior> \x1b]133;B\aecho\x1b]133;C\a\r\nCOMPLETED-OUTPUT\r\n\x1b]133;D;0\a"
+                 "\x1b]133;A;redraw=%s\a\x1b[48;2;220;30;30mOLD-PROMPT-"
+                 "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+                 "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+                 "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+                 "\x1b[0m\x1b]133;B\ainput-tail",
+                 modes[mode], modes[mode]);
+        write_vt(surface, bytes);
+        if (!wait_until(app, surface, ^bool {
+                return viewport_rows_are(surface, wide, rows, before) && band_has_color(view, true, 2, 4, rows) == 1;
+            })) {
+            fprintf(stderr, "source-grid reflow redraw=%s before\n", modes[mode]);
+            dump_viewport_rows(surface, wide, rows);
+            abort();
+        }
+
+        // zmx narrows the source grid while the physical view stays the same.
+        assert(ghostty_surface_set_source_grid(surface, narrow, rows));
+        wait_grid(app, surface, narrow, rows);
+        struct { const char *phase; const char *input; NSArray<NSString *> *rows; bool red; bool blue; } steps[] = {
+            {"narrowed", "", narrowed, true, false},
+            {"minimal redisplay", "\r\x1b]133;A\ashort> \x1b]133;B\ax", redrawn, true, false},
+            {"explicit-erase redisplay",
+             "\x1b[3;1H\x1b[J\x1b]133;A\a\x1b[48;2;30;30;220mclean> \x1b[0m\x1b]133;B\ay", erased, false, true},
+            {"completion", "\x1b]133;C\a\r\nAFTER-OUTPUT\r\n\x1b]133;D;0\a\x1b]133;A\anext> \x1b]133;B\a",
+             completed, false, true},
+        };
+        for (size_t step = 0; step < sizeof(steps) / sizeof(steps[0]); step++) {
+            write_vt(surface, steps[step].input);
+            NSArray<NSString *> *expected = steps[step].rows;
+            const bool red = steps[step].red, blue = steps[step].blue;
+            if (!wait_until(app, surface, ^bool {
+                    if (!viewport_rows_are(surface, narrow, rows, expected)) return false;
+                    const int red_now = red ? band_has_color(view, true, reflow_first, reflow_last, rows)
+                                            : band_has_color(view, true, 0, rows - 1, rows);
+                    return red_now == (red ? 1 : 0)
+                        && (!blue || band_has_color(view, false, clean_row, clean_row, rows) == 1);
+                })) {
+                fprintf(stderr, "source-grid reflow redraw=%s %s: expected red %s%s\n", modes[mode],
+                        steps[step].phase, red ? "in reflowed rows" : "absent", blue ? ", blue clean prompt" : "");
+                dump_viewport_rows(surface, narrow, rows);
+                abort();
+            }
+        }
+
+        // Ordinary-shell control: releasing the pin while the physical grid is
+        // wider takes Ghostty's normal resize, which clears the current prompt
+        // for a redraw-capable shell. Completed output survives in every mode.
+        assert(ghostty_surface_clear_source_grid(surface));
+        wait_grid(app, surface, wide, rows);
+        const bool shell_redraws = strcmp(modes[mode], "0") != 0;
+        NSArray<NSString *> *unpinned = shell_redraws ? [completed subarrayWithRange:NSMakeRange(0, 4)] : completed;
+        if (!wait_until(app, surface, ^bool { return viewport_rows_are(surface, wide, rows, unpinned); })) {
+            fprintf(stderr, "source-grid reflow redraw=%s mismatched unpin\n", modes[mode]);
+            dump_viewport_rows(surface, wide, rows);
+            abort();
+        }
+        printf(PROBE_PLATFORM " source-grid prompt reflow: redraw=%s wrap/redisplay/erase/unpin PASS\n", modes[mode]);
+    }
+    write_vt(surface, "\x1b" "c");
 }
 
 static void wakeup(void *data) { (void)data; }
@@ -438,7 +602,10 @@ static int run_probe(int argc, char **argv, NSData *snapshot, NSData *mode_snaps
             [window orderFront:nil];
 #endif
             wait_grid(app, surface, 80, 24);
-            if (scenario == 0) check_source_prompt_history(app, surface, view, width, height);
+            if (scenario == 0) {
+                check_source_prompt_history(app, surface, view, width, height);
+                check_source_prompt_reflow(app, surface, view);
+            }
             // A truncated READY must leave the original surface usable.
             assert(!graftty_probe_surface_snapshot_ready(surface, fixture.bytes, 16));
             assert(graftty_probe_surface_snapshot_ready(surface, fixture.bytes, fixture.length));
