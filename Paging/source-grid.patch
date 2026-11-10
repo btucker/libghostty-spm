@@ -27,7 +27,7 @@
          io.terminal_stream = .init(.{ .allocator = io.alloc, .handler = handler });
          io.mailbox.send(.{ .linefeed_mode = io.terminal.modes.get(.linefeed) }, core.renderer_state.mutex);
          if (io.terminal.modes.get(.synchronized_output))
-@@ -2076,6 +2078,64 @@ pub const CAPI = struct {
+@@ -2076,6 +2078,69 @@ pub const CAPI = struct {
          return true;
      }
  
@@ -43,6 +43,11 @@
 +        const io = &core.io;
 +        const changed = io.terminal.cols != cols or io.terminal.rows != rows;
 +        if (changed) {
++            // The source stream owns shell redraw. A mirror must retain its
++            // prompt/input rows until that stream actually changes them.
++            const prompt_redraw = io.terminal.flags.shell_redraws_prompt;
++            io.terminal.flags.shell_redraws_prompt = .false;
++            defer io.terminal.flags.shell_redraws_prompt = prompt_redraw;
 +            io.terminal.resize(io.alloc, .{
 +                .cols = cols,
 +                .rows = rows,
