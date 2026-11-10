@@ -1,3 +1,11 @@
+> [!IMPORTANT]
+> **Archived.** Graftty no longer uses this fork. It builds libghostty from a
+> pinned Ghostty commit plus the patch series in
+> [btucker/graftty `deps/ghostty/`](https://github.com/btucker/graftty/tree/main/deps/ghostty)
+> (btucker/graftty#860). Published revisions and release assets stay available
+> so older Graftty tags keep building. Upstream:
+> [Lakr233/libghostty-spm](https://github.com/Lakr233/libghostty-spm).
+
 # GhosttyKit
 
 Swift Package wrapping [Ghostty](https://ghostty.org)'s terminal emulator library for Apple platforms.
