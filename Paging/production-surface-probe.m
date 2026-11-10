@@ -411,9 +411,11 @@ static void check_source_prompt_reflow(ghostty_app_t app, ghostty_surface_t surf
     NSArray<NSString *> *erased = @[@"prior> echo", @"COMPLETED-OUTPUT", @"clean> y"];
     NSArray<NSString *> *completed = @[@"prior> echo", @"COMPLETED-OUTPUT", @"clean> y", @"AFTER-OUTPUT", @"next>"];
     // The 197-cell red prompt plus its 10-cell input spans rows 2-4 at 80
-    // columns and rows 2-7 at 40, so red in rows 5-6 proves a reflowed frame.
-    // After the explicit erase, row 2 holds the blue "clean> " prompt.
-    enum { reflow_first = 5, reflow_last = 6, clean_row = 2 };
+    // columns and rows 2-7 at 40. Bands divide the frame height evenly, so
+    // window padding lets row 4 spill into the row 5 band; row 6 is clear of
+    // the old rows, so red there proves a reflowed frame. After the explicit
+    // erase, row 2 holds the blue "clean> " prompt.
+    enum { reflow_row = 6, clean_row = 2 };
     const char *modes[] = {"0", "1", "last"};
     for (size_t mode = 0; mode < sizeof(modes) / sizeof(modes[0]); mode++) {
         char bytes[512];
@@ -429,7 +431,8 @@ static void check_source_prompt_reflow(ghostty_app_t app, ghostty_surface_t surf
                  modes[mode], modes[mode]);
         write_vt(surface, bytes);
         if (!wait_until(app, surface, ^bool {
-                return viewport_rows_are(surface, wide, rows, before) && band_has_color(view, true, 2, 4, rows) == 1;
+                return viewport_rows_are(surface, wide, rows, before) && band_has_color(view, true, 2, 4, rows) == 1
+                    && band_has_color(view, true, reflow_row, reflow_row, rows) == 0;
             })) {
             fprintf(stderr, "source-grid reflow redraw=%s before\n", modes[mode]);
             dump_viewport_rows(surface, wide, rows);
@@ -453,7 +456,7 @@ static void check_source_prompt_reflow(ghostty_app_t app, ghostty_surface_t surf
             const bool red = steps[step].red, blue = steps[step].blue;
             if (!wait_until(app, surface, ^bool {
                     if (!viewport_rows_are(surface, narrow, rows, expected)) return false;
-                    const int red_now = red ? band_has_color(view, true, reflow_first, reflow_last, rows)
+                    const int red_now = red ? band_has_color(view, true, reflow_row, reflow_row, rows)
                                             : band_has_color(view, true, 0, rows - 1, rows);
                     return red_now == (red ? 1 : 0)
                         && (!blue || band_has_color(view, false, clean_row, clean_row, rows) == 1);
